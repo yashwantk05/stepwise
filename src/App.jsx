@@ -1,198 +1,470 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Excalidraw } from "@excalidraw/excalidraw";
+import { Excalidraw, MainMenu } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import "./App.css";
+import {
+  clearActiveUser,
+  createAssignment,
+  deleteAssignment,
+  deleteAssignmentPdf,
+  getActiveUser,
+  getAssignmentById,
+  getAssignmentPdf,
+  getProblemScene,
+  listAssignments,
+  saveAssignmentPdf,
+  saveProblemScene,
+  setActiveUser,
+} from "./services/storage";
 
-const STORAGE_KEY = "stepwise.whiteboard.sessions";
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
-const createSessionId = () =>
-  `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const getSessionLabel = (session) =>
-  `${session.name} (${new Date(session.updatedAt).toLocaleString()})`;
+const PROBLEMS = [1, 2, 3];
 
 const getDefaultScene = () => ({
   elements: [],
-  appState: {
-    viewBackgroundColor: "#f8fafc",
-  },
+  appState: { viewBackgroundColor: "#f8fafc" },
   files: {},
 });
 
-const loadStoredSessions = () => {
+const formatDate = (time) => new Date(time).toLocaleString();
+
+const decodeJwtPayload = (token) => {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    const base64 = token.split(".")[1]?.replace(/-/g, "+").replace(/_/g, "/");
+    if (!base64) return null;
+    const json = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
+        .join(""),
+    );
+    return JSON.parse(json);
   } catch {
-    return [];
+    return null;
   }
 };
 
-const getInitialState = () => {
-  const initialSessions = loadStoredSessions();
-  return {
-    sessions: initialSessions,
-    activeSessionId: initialSessions[0]?.id || null,
-    statusMessage:
-      initialSessions.length > 0
-        ? `Loaded ${initialSessions[0].name}.`
-        : "Create a session to start drawing.",
-  };
+const parseRoute = (path) => {
+  if (path === "/login") return { name: "login" };
+  if (path === "/assignments") return { name: "assignments" };
+
+  const problemMatch = path.match(/^\/assignments\/([^/]+)\/problems\/([1-3])$/);
+  if (problemMatch) {
+    return {
+      name: "problem-board",
+      assignmentId: decodeURIComponent(problemMatch[1]),
+      problemIndex: Number(problemMatch[2]),
+    };
+  }
+
+  const detailMatch = path.match(/^\/assignments\/([^/]+)$/);
+  if (detailMatch) {
+    return {
+      name: "assignment-detail",
+      assignmentId: decodeURIComponent(detailMatch[1]),
+    };
+  }
+
+  return { name: "unknown" };
 };
 
-function App() {
-  const initialState = useMemo(() => getInitialState(), []);
-  const [excalidrawAPI, setExcalidrawAPI] = useState(null);
-  const [sessions, setSessions] = useState(initialState.sessions);
-  const [sessionName, setSessionName] = useState("");
-  const [activeSessionId, setActiveSessionId] = useState(initialState.activeSessionId);
-  const [statusMessage, setStatusMessage] = useState(initialState.statusMessage);
-
-  const latestSceneRef = useRef(getDefaultScene());
+function LoginPage({ onSignIn }) {
+  const [name, setName] = useState("");
+  const [authError, setAuthError] = useState("");
+  const googleButtonRef = useRef(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-  }, [sessions]);
+    if (!GOOGLE_CLIENT_ID) return;
 
-  const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) || null,
-    [activeSessionId, sessions],
-  );
+    const initGoogle = () => {
+      if (!window.google?.accounts?.id || !googleButtonRef.current) return;
 
-  useEffect(() => {
-    if (!excalidrawAPI) return;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (response) => {
+          const payload = decodeJwtPayload(response.credential);
+          if (!payload?.sub) {
+            setAuthError("Google sign-in failed. Please continue in test mode.");
+            return;
+          }
 
-    if (!activeSession) {
-      excalidrawAPI.updateScene(getDefaultScene());
+          onSignIn({
+            id: payload.sub,
+            name: payload.name || payload.email || "Google User",
+            email: payload.email || "",
+          });
+        },
+      });
+
+      googleButtonRef.current.innerHTML = "";
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: "outline",
+        size: "large",
+        width: 260,
+      });
+    };
+
+    if (window.google?.accounts?.id) {
+      initGoogle();
       return;
     }
 
-    excalidrawAPI.updateScene(activeSession.scene || getDefaultScene());
-  }, [activeSession, excalidrawAPI]);
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = initGoogle;
+    script.onerror = () => setAuthError("Unable to load Google sign-in. Use test mode.");
+    document.body.appendChild(script);
+
+    return () => {
+      document.body.removeChild(script);
+    };
+  }, [onSignIn]);
+
+  const handleDevSignIn = (event) => {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) return;
+
+    onSignIn({
+      id: `local-${trimmed.toLowerCase().replace(/\s+/g, "-")}`,
+      name: trimmed,
+      email: "",
+    });
+  };
+
+  return (
+    <section className="auth-card">
+      <p className="eyebrow">StepWise</p>
+      <h1>Sign in to Dashboard</h1>
+      <p className="subtle">Access assignments, uploads, and problem whiteboards.</p>
+
+      <div className="auth-block">
+        <h2>Google Sign-In</h2>
+        {GOOGLE_CLIENT_ID ? (
+          <div ref={googleButtonRef} className="google-button-slot" />
+        ) : (
+          <p className="subtle">Set `VITE_GOOGLE_CLIENT_ID` to enable Google login.</p>
+        )}
+      </div>
+
+      <div className="auth-divider">or</div>
+
+      <form className="auth-block" onSubmit={handleDevSignIn}>
+        <h2>Test Mode</h2>
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Enter your name"
+          aria-label="Name"
+        />
+        <button type="submit">Continue</button>
+      </form>
+
+      {authError && <p className="error-text">{authError}</p>}
+    </section>
+  );
+}
+
+function AssignmentsPage({ user, navigate, onSignOut }) {
+  const [assignments, setAssignments] = useState([]);
+  const [title, setTitle] = useState("");
+  const [status, setStatus] = useState("Loading assignments...");
+
+  const loadAssignments = useCallback(async () => {
+    const data = await listAssignments(user.id);
+    setAssignments(data);
+    setStatus(data.length === 0 ? "No assignments yet." : `${data.length} assignments found.`);
+  }, [user.id]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadAssignments();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadAssignments]);
+
+  const handleCreate = async (event) => {
+    event.preventDefault();
+    const trimmed = title.trim();
+    if (!trimmed) return;
+
+    await createAssignment(user.id, trimmed);
+    setTitle("");
+    await loadAssignments();
+  };
+
+  const handleDelete = async (assignmentId, assignmentTitle) => {
+    const shouldDelete = window.confirm(`Delete assignment "${assignmentTitle}"?`);
+    if (!shouldDelete) return;
+    await deleteAssignment(user.id, assignmentId);
+    await loadAssignments();
+  };
+
+  return (
+    <>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Dashboard</p>
+          <h1>{user.name}'s Assignments</h1>
+        </div>
+        <div className="topbar-actions">
+          <p className="status-pill">{status}</p>
+          <button type="button" className="outline" onClick={onSignOut}>
+            Sign Out
+          </button>
+        </div>
+      </header>
+
+      <section className="panel">
+        <form className="control-row" onSubmit={handleCreate}>
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="New assignment title"
+            aria-label="New assignment title"
+          />
+          <button type="submit">Create Assignment</button>
+        </form>
+      </section>
+
+      <section className="grid-list">
+        {assignments.map((assignment) => (
+          <article key={assignment.id} className="assignment-card">
+            <h2>{assignment.title}</h2>
+            <p>Updated: {formatDate(assignment.updatedAt)}</p>
+            <div className="card-actions">
+              <button type="button" onClick={() => navigate(`/assignments/${assignment.id}`)}>
+                Open
+              </button>
+              <button
+                type="button"
+                className="danger"
+                onClick={() => handleDelete(assignment.id, assignment.title)}
+              >
+                Delete
+              </button>
+            </div>
+          </article>
+        ))}
+      </section>
+    </>
+  );
+}
+
+function AssignmentDetailPage({ user, assignmentId, navigate }) {
+  const [assignment, setAssignment] = useState(null);
+  const [fileRecord, setFileRecord] = useState(null);
+  const [status, setStatus] = useState("Loading assignment...");
+
+  const load = useCallback(async () => {
+    const target = await getAssignmentById(assignmentId);
+    if (!target || target.userId !== user.id) {
+      setStatus("Assignment not found.");
+      setAssignment(null);
+      return;
+    }
+
+    const file = await getAssignmentPdf(user.id, assignmentId);
+    setAssignment(target);
+    setFileRecord(file || null);
+    setStatus("Assignment loaded.");
+  }, [assignmentId, user.id]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  const handleUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.type !== "application/pdf") {
+      setStatus("Please upload a PDF file.");
+      return;
+    }
+
+    await saveAssignmentPdf(user.id, assignmentId, file);
+    setStatus(`Uploaded ${file.name}.`);
+    await load();
+  };
+
+  const handleOpenPdf = () => {
+    if (!fileRecord?.blob) return;
+    const url = URL.createObjectURL(fileRecord.blob);
+    window.open(url, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+
+  const handleRemovePdf = async () => {
+    await deleteAssignmentPdf(user.id, assignmentId);
+    setStatus("Removed uploaded PDF.");
+    await load();
+  };
+
+  const handleDeleteAssignment = async () => {
+    if (!assignment) return;
+    const shouldDelete = window.confirm(`Delete assignment "${assignment.title}"?`);
+    if (!shouldDelete) return;
+
+    await deleteAssignment(user.id, assignment.id);
+    navigate("/assignments");
+  };
+
+  if (!assignment) {
+    return (
+      <section className="panel">
+        <p>{status}</p>
+        <button type="button" onClick={() => navigate("/assignments")}>
+          Back to Assignments
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Assignment</p>
+          <h1>{assignment.title}</h1>
+        </div>
+        <div className="topbar-actions">
+          <p className="status-pill">{status}</p>
+          <button type="button" className="outline" onClick={() => navigate("/assignments")}>
+            Back
+          </button>
+        </div>
+      </header>
+
+      <section className="panel">
+        <h2>Problem Sheet Upload</h2>
+        <div className="control-row">
+          <input type="file" accept="application/pdf" onChange={handleUpload} />
+          {fileRecord && (
+            <>
+              <button type="button" onClick={handleOpenPdf}>
+                Open PDF
+              </button>
+              <button type="button" className="danger" onClick={handleRemovePdf}>
+                Remove PDF
+              </button>
+            </>
+          )}
+        </div>
+        {fileRecord ? (
+          <p className="subtle">
+            {fileRecord.fileName} ({Math.round(fileRecord.size / 1024)} KB) - uploaded {formatDate(fileRecord.uploadedAt)}
+          </p>
+        ) : (
+          <p className="subtle">No PDF uploaded yet.</p>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>Problems</h2>
+        <div className="grid-list problem-grid">
+          {PROBLEMS.map((problemIndex) => (
+            <article key={problemIndex} className="assignment-card">
+              <h3>Problem {problemIndex}</h3>
+              <p>Opens a dedicated whiteboard session.</p>
+              <button
+                type="button"
+                onClick={() => navigate(`/assignments/${assignmentId}/problems/${problemIndex}`)}
+              >
+                Open Whiteboard
+              </button>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel">
+        <button type="button" className="danger" onClick={handleDeleteAssignment}>
+          Delete Assignment
+        </button>
+      </section>
+    </>
+  );
+}
+
+function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
+  const [assignment, setAssignment] = useState(null);
+  const [status, setStatus] = useState("Loading whiteboard...");
+  const [excalidrawAPI, setExcalidrawAPI] = useState(null);
+  const [initialScene, setInitialScene] = useState(getDefaultScene());
+  const latestSceneRef = useRef(getDefaultScene());
+
+  useEffect(() => {
+    const loadData = async () => {
+      const target = await getAssignmentById(assignmentId);
+      if (!target || target.userId !== user.id) {
+        setStatus("Assignment not found.");
+        return;
+      }
+
+      const storedScene = await getProblemScene(user.id, assignmentId, problemIndex);
+      const scene = storedScene?.scene || getDefaultScene();
+
+      setAssignment(target);
+      setInitialScene(scene);
+      latestSceneRef.current = scene;
+      setStatus(
+        storedScene
+          ? `Last saved ${formatDate(storedScene.updatedAt)}.`
+          : "No saved drawing yet.",
+      );
+    };
+
+    loadData();
+  }, [assignmentId, problemIndex, user.id]);
+
+  useEffect(() => {
+    if (!excalidrawAPI) return;
+    excalidrawAPI.updateScene(initialScene);
+  }, [excalidrawAPI, initialScene]);
 
   const handleChange = useCallback((elements, appState, files) => {
     latestSceneRef.current = { elements, appState, files };
   }, []);
 
-  const handleCreateSession = useCallback(() => {
-    const name = sessionName.trim() || `Session ${sessions.length + 1}`;
-    const now = Date.now();
+  const handleSave = async () => {
+    await saveProblemScene(user.id, assignmentId, problemIndex, latestSceneRef.current);
+    setStatus(`Saved at ${new Date().toLocaleTimeString()}.`);
+  };
 
-    const newSession = {
-      id: createSessionId(),
-      name,
-      createdAt: now,
-      updatedAt: now,
-      scene: getDefaultScene(),
-    };
-
-    setSessions((prev) => [newSession, ...prev]);
-    setActiveSessionId(newSession.id);
-    setSessionName("");
-    setStatusMessage(`Created ${name}.`);
-
-    if (excalidrawAPI) {
-      excalidrawAPI.updateScene(getDefaultScene());
-    }
-    latestSceneRef.current = getDefaultScene();
-  }, [excalidrawAPI, sessionName, sessions.length]);
-
-  const handleSaveSession = useCallback(() => {
-    if (!activeSessionId) {
-      setStatusMessage("Create or select a session before saving.");
-      return;
-    }
-
-    let saved = false;
-    setSessions((prev) =>
-      prev.map((session) => {
-        if (session.id !== activeSessionId) return session;
-        saved = true;
-        return {
-          ...session,
-          updatedAt: Date.now(),
-          scene: latestSceneRef.current,
-        };
-      }),
+  if (!assignment) {
+    return (
+      <section className="panel">
+        <p>{status}</p>
+        <button type="button" onClick={() => navigate("/assignments")}>Go to Assignments</button>
+      </section>
     );
-
-    if (!saved) {
-      setStatusMessage("Selected session was not found.");
-      return;
-    }
-
-    setStatusMessage(`Saved ${activeSession?.name || "session"}.`);
-  }, [activeSession?.name, activeSessionId]);
-
-  const handleDeleteSession = useCallback(() => {
-    if (!activeSessionId) {
-      setStatusMessage("Select a session to delete.");
-      return;
-    }
-
-    const target = sessions.find((session) => session.id === activeSessionId);
-    const nextSessions = sessions.filter((session) => session.id !== activeSessionId);
-
-    setSessions(nextSessions);
-    setActiveSessionId(nextSessions[0]?.id || null);
-
-    if (nextSessions.length === 0 && excalidrawAPI) {
-      excalidrawAPI.updateScene(getDefaultScene());
-      latestSceneRef.current = getDefaultScene();
-    }
-
-    setStatusMessage(`Deleted ${target?.name || "session"}.`);
-  }, [activeSessionId, excalidrawAPI, sessions]);
+  }
 
   return (
-    <main className="app-shell">
+    <>
       <header className="topbar">
         <div>
-          <p className="eyebrow">StepWise</p>
-          <h1>Whiteboard Sessions</h1>
+          <p className="eyebrow">Whiteboard</p>
+          <h1>{assignment.title} - Problem {problemIndex}</h1>
         </div>
-        <p className="status" role="status" aria-live="polite">
-          {statusMessage}
-        </p>
-      </header>
-
-      <section className="panel">
-        <div className="control-row">
-          <input
-            type="text"
-            value={sessionName}
-            onChange={(event) => setSessionName(event.target.value)}
-            placeholder="Session name"
-            aria-label="Session name"
-          />
-          <button type="button" onClick={handleCreateSession}>
-            Create Session
-          </button>
-        </div>
-
-        <div className="control-row">
-          <select
-            value={activeSessionId || ""}
-            onChange={(event) => setActiveSessionId(event.target.value || null)}
-            aria-label="Choose session"
+        <div className="topbar-actions">
+          <p className="status-pill">{status}</p>
+          <button type="button" onClick={handleSave}>Save Drawing</button>
+          <button
+            type="button"
+            className="outline"
+            onClick={() => navigate(`/assignments/${assignmentId}`)}
           >
-            <option value="">Select session</option>
-            {sessions.map((session) => (
-              <option key={session.id} value={session.id}>
-                {getSessionLabel(session)}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={handleSaveSession}>
-            Save Drawing
-          </button>
-          <button type="button" className="danger" onClick={handleDeleteSession}>
-            Delete Session
+            Back
           </button>
         </div>
-      </section>
+      </header>
 
       <section className="canvas-area">
         <Excalidraw
@@ -200,12 +472,107 @@ function App() {
           onChange={handleChange}
           UIOptions={{
             canvasActions: {
+              export: { saveFileToDisk: true },
               saveToActiveFile: false,
               loadScene: false,
             },
           }}
-        />
+        >
+          <MainMenu>
+            <MainMenu.DefaultItems.Export />
+            <MainMenu.DefaultItems.SaveAsImage />
+            <MainMenu.DefaultItems.SearchMenu />
+            <MainMenu.DefaultItems.Help />
+            <MainMenu.DefaultItems.ClearCanvas />
+            <MainMenu.Separator />
+            <MainMenu.DefaultItems.ToggleTheme />
+            <MainMenu.DefaultItems.ChangeCanvasBackground />
+          </MainMenu>
+        </Excalidraw>
       </section>
+    </>
+  );
+}
+
+function App() {
+  const [user, setUser] = useState(() => getActiveUser());
+  const [path, setPath] = useState(() => window.location.pathname || "/login");
+
+  const navigate = useCallback((nextPath, replace = false) => {
+    if (replace) {
+      window.history.replaceState({}, "", nextPath);
+    } else {
+      window.history.pushState({}, "", nextPath);
+    }
+    setPath(nextPath);
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => setPath(window.location.pathname || "/login");
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
+    let timer = null;
+    if (!user && path !== "/login") {
+      timer = window.setTimeout(() => navigate("/login", true), 0);
+      return;
+    }
+    if (user && (path === "/" || path === "/login")) {
+      timer = window.setTimeout(() => navigate("/assignments", true), 0);
+    }
+    return () => {
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [navigate, path, user]);
+
+  const route = useMemo(() => parseRoute(path), [path]);
+
+  const handleSignIn = useCallback(
+    (nextUser) => {
+      setUser(nextUser);
+      setActiveUser(nextUser);
+      navigate("/assignments", true);
+    },
+    [navigate],
+  );
+
+  const handleSignOut = useCallback(() => {
+    clearActiveUser();
+    setUser(null);
+    navigate("/login", true);
+  }, [navigate]);
+
+  return (
+    <main className="app-shell">
+      {route.name === "login" && <LoginPage onSignIn={handleSignIn} />}
+
+      {user && route.name === "assignments" && (
+        <AssignmentsPage user={user} navigate={navigate} onSignOut={handleSignOut} />
+      )}
+
+      {user && route.name === "assignment-detail" && (
+        <AssignmentDetailPage user={user} assignmentId={route.assignmentId} navigate={navigate} />
+      )}
+
+      {user && route.name === "problem-board" && (
+        <ProblemBoardPage
+          user={user}
+          assignmentId={route.assignmentId}
+          problemIndex={route.problemIndex}
+          navigate={navigate}
+        />
+      )}
+
+      {route.name === "unknown" && (
+        <section className="panel">
+          <p>Page not found.</p>
+          <button type="button" onClick={() => navigate(user ? "/assignments" : "/login", true)}>
+            Go Home
+          </button>
+        </section>
+      )}
     </main>
   );
 }

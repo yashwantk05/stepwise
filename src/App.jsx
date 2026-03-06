@@ -3,21 +3,21 @@ import { Excalidraw, MainMenu } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import "./App.css";
 import {
-  clearActiveUser,
   createAssignment,
   deleteAssignment,
   deleteAssignmentPdf,
-  getActiveUser,
+  getAssignmentPdfDownloadUrl,
   getAssignmentById,
   getAssignmentPdf,
+  getCurrentUser,
+  getGoogleSignInUrl,
   getProblemScene,
   listAssignments,
+  requestAccountDeletion,
   saveAssignmentPdf,
   saveProblemScene,
-  setActiveUser,
+  signOut,
 } from "./services/storage";
-
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
 const PROBLEMS = [1, 2, 3];
 
@@ -28,22 +28,6 @@ const getDefaultScene = () => ({
 });
 
 const formatDate = (time) => new Date(time).toLocaleString();
-
-const decodeJwtPayload = (token) => {
-  try {
-    const base64 = token.split(".")[1]?.replace(/-/g, "+").replace(/_/g, "/");
-    if (!base64) return null;
-    const json = decodeURIComponent(
-      atob(base64)
-        .split("")
-        .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
-        .join(""),
-    );
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
-};
 
 const parseRoute = (path) => {
   if (path === "/login") return { name: "login" };
@@ -69,70 +53,9 @@ const parseRoute = (path) => {
   return { name: "unknown" };
 };
 
-function LoginPage({ onSignIn }) {
-  const [name, setName] = useState("");
-  const [authError, setAuthError] = useState("");
-  const googleButtonRef = useRef(null);
-
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
-
-    const initGoogle = () => {
-      if (!window.google?.accounts?.id || !googleButtonRef.current) return;
-
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response) => {
-          const payload = decodeJwtPayload(response.credential);
-          if (!payload?.sub) {
-            setAuthError("Google sign-in failed. Please continue in test mode.");
-            return;
-          }
-
-          onSignIn({
-            id: payload.sub,
-            name: payload.name || payload.email || "Google User",
-            email: payload.email || "",
-          });
-        },
-      });
-
-      googleButtonRef.current.innerHTML = "";
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: "outline",
-        size: "large",
-        width: 260,
-      });
-    };
-
-    if (window.google?.accounts?.id) {
-      initGoogle();
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = initGoogle;
-    script.onerror = () => setAuthError("Unable to load Google sign-in. Use test mode.");
-    document.body.appendChild(script);
-
-    return () => {
-      document.body.removeChild(script);
-    };
-  }, [onSignIn]);
-
-  const handleDevSignIn = (event) => {
-    event.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) return;
-
-    onSignIn({
-      id: `local-${trimmed.toLowerCase().replace(/\s+/g, "-")}`,
-      name: trimmed,
-      email: "",
-    });
+function LoginPage({ authMessage }) {
+  const handleGoogleSignIn = () => {
+    window.location.assign(getGoogleSignInUrl());
   };
 
   return (
@@ -142,42 +65,30 @@ function LoginPage({ onSignIn }) {
       <p className="subtle">Access assignments, uploads, and problem whiteboards.</p>
 
       <div className="auth-block">
-        <h2>Google Sign-In</h2>
-        {GOOGLE_CLIENT_ID ? (
-          <div ref={googleButtonRef} className="google-button-slot" />
-        ) : (
-          <p className="subtle">Set `VITE_GOOGLE_CLIENT_ID` to enable Google login.</p>
-        )}
+        <h2>Google Sign-In (Server OAuth)</h2>
+        <button type="button" onClick={handleGoogleSignIn}>
+          Continue with Google
+        </button>
+        <p className="subtle">
+          You will be redirected to Google and back to this app after sign-in.
+        </p>
       </div>
 
-      <div className="auth-divider">or</div>
-
-      <form className="auth-block" onSubmit={handleDevSignIn}>
-        <h2>Test Mode</h2>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Enter your name"
-          aria-label="Name"
-        />
-        <button type="submit">Continue</button>
-      </form>
-
-      {authError && <p className="error-text">{authError}</p>}
+      {authMessage && <p className="error-text">{authMessage}</p>}
     </section>
   );
 }
 
-function AssignmentsPage({ user, navigate, onSignOut }) {
+function AssignmentsPage({ user, navigate, onSignOut, onDeleteAccount }) {
   const [assignments, setAssignments] = useState([]);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Loading assignments...");
 
   const loadAssignments = useCallback(async () => {
-    const data = await listAssignments(user.id);
+    const data = await listAssignments();
     setAssignments(data);
     setStatus(data.length === 0 ? "No assignments yet." : `${data.length} assignments found.`);
-  }, [user.id]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -191,7 +102,7 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
     const trimmed = title.trim();
     if (!trimmed) return;
 
-    await createAssignment(user.id, trimmed);
+    await createAssignment(trimmed);
     setTitle("");
     await loadAssignments();
   };
@@ -199,7 +110,7 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
   const handleDelete = async (assignmentId, assignmentTitle) => {
     const shouldDelete = window.confirm(`Delete assignment "${assignmentTitle}"?`);
     if (!shouldDelete) return;
-    await deleteAssignment(user.id, assignmentId);
+    await deleteAssignment(assignmentId);
     await loadAssignments();
   };
 
@@ -212,6 +123,9 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
         </div>
         <div className="topbar-actions">
           <p className="status-pill">{status}</p>
+          <button type="button" className="danger" onClick={onDeleteAccount}>
+            Delete Account
+          </button>
           <button type="button" className="outline" onClick={onSignOut}>
             Sign Out
           </button>
@@ -254,24 +168,23 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
   );
 }
 
-function AssignmentDetailPage({ user, assignmentId, navigate }) {
+function AssignmentDetailPage({ assignmentId, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [fileRecord, setFileRecord] = useState(null);
   const [status, setStatus] = useState("Loading assignment...");
 
   const load = useCallback(async () => {
-    const target = await getAssignmentById(assignmentId);
-    if (!target || target.userId !== user.id) {
+    try {
+      const target = await getAssignmentById(assignmentId);
+      const file = await getAssignmentPdf(assignmentId);
+      setAssignment(target);
+      setFileRecord(file || null);
+      setStatus("Assignment loaded.");
+    } catch {
       setStatus("Assignment not found.");
       setAssignment(null);
-      return;
     }
-
-    const file = await getAssignmentPdf(user.id, assignmentId);
-    setAssignment(target);
-    setFileRecord(file || null);
-    setStatus("Assignment loaded.");
-  }, [assignmentId, user.id]);
+  }, [assignmentId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -288,20 +201,18 @@ function AssignmentDetailPage({ user, assignmentId, navigate }) {
       return;
     }
 
-    await saveAssignmentPdf(user.id, assignmentId, file);
+    await saveAssignmentPdf(assignmentId, file);
     setStatus(`Uploaded ${file.name}.`);
     await load();
   };
 
-  const handleOpenPdf = () => {
-    if (!fileRecord?.blob) return;
-    const url = URL.createObjectURL(fileRecord.blob);
+  const handleOpenPdf = async () => {
+    const url = await getAssignmentPdfDownloadUrl(assignmentId);
     window.open(url, "_blank", "noopener,noreferrer");
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
   };
 
   const handleRemovePdf = async () => {
-    await deleteAssignmentPdf(user.id, assignmentId);
+    await deleteAssignmentPdf(assignmentId);
     setStatus("Removed uploaded PDF.");
     await load();
   };
@@ -311,7 +222,7 @@ function AssignmentDetailPage({ user, assignmentId, navigate }) {
     const shouldDelete = window.confirm(`Delete assignment "${assignment.title}"?`);
     if (!shouldDelete) return;
 
-    await deleteAssignment(user.id, assignment.id);
+    await deleteAssignment(assignment.id);
     navigate("/assignments");
   };
 
@@ -392,7 +303,7 @@ function AssignmentDetailPage({ user, assignmentId, navigate }) {
   );
 }
 
-function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
+function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [status, setStatus] = useState("Loading whiteboard...");
   const [excalidrawAPI, setExcalidrawAPI] = useState(null);
@@ -402,12 +313,7 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
   useEffect(() => {
     const loadData = async () => {
       const target = await getAssignmentById(assignmentId);
-      if (!target || target.userId !== user.id) {
-        setStatus("Assignment not found.");
-        return;
-      }
-
-      const storedScene = await getProblemScene(user.id, assignmentId, problemIndex);
+      const storedScene = await getProblemScene(assignmentId, problemIndex);
       const scene = storedScene?.scene || getDefaultScene();
 
       setAssignment(target);
@@ -420,8 +326,8 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
       );
     };
 
-    loadData();
-  }, [assignmentId, problemIndex, user.id]);
+    loadData().catch(() => setStatus("Unable to load whiteboard."));
+  }, [assignmentId, problemIndex]);
 
   useEffect(() => {
     if (!excalidrawAPI) return;
@@ -433,7 +339,7 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
   }, []);
 
   const handleSave = async () => {
-    await saveProblemScene(user.id, assignmentId, problemIndex, latestSceneRef.current);
+    await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
     setStatus(`Saved at ${new Date().toLocaleTimeString()}.`);
   };
 
@@ -495,7 +401,9 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
 }
 
 function App() {
-  const [user, setUser] = useState(() => getActiveUser());
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
   const [path, setPath] = useState(() => window.location.pathname || "/login");
 
   const navigate = useCallback((nextPath, replace = false) => {
@@ -514,6 +422,20 @@ function App() {
   }, []);
 
   useEffect(() => {
+    getCurrentUser()
+      .then((currentUser) => {
+        setUser(currentUser);
+      })
+      .catch(() => {
+        setAuthMessage("Unable to validate your session. Please sign in again.");
+      })
+      .finally(() => {
+        setAuthReady(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
     let timer = null;
     if (!user && path !== "/login") {
       timer = window.setTimeout(() => navigate("/login", true), 0);
@@ -525,40 +447,56 @@ function App() {
     return () => {
       if (timer) window.clearTimeout(timer);
     };
-  }, [navigate, path, user]);
+  }, [authReady, navigate, path, user]);
 
   const route = useMemo(() => parseRoute(path), [path]);
 
-  const handleSignIn = useCallback(
-    (nextUser) => {
-      setUser(nextUser);
-      setActiveUser(nextUser);
-      navigate("/assignments", true);
-    },
-    [navigate],
-  );
-
-  const handleSignOut = useCallback(() => {
-    clearActiveUser();
+  const handleSignOut = useCallback(async () => {
+    await signOut();
     setUser(null);
     navigate("/login", true);
   }, [navigate]);
 
+  const handleDeleteAccount = useCallback(async () => {
+    const shouldDelete = window.confirm(
+      "Delete your account? This will remove your assignments and uploaded files.",
+    );
+    if (!shouldDelete) return;
+    await requestAccountDeletion();
+    setUser(null);
+    setAuthMessage("Your account deletion request has been submitted.");
+    navigate("/login", true);
+  }, [navigate]);
+
+  if (!authReady) {
+    return (
+      <main className="app-shell">
+        <section className="panel">
+          <p>Checking session...</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
-      {route.name === "login" && <LoginPage onSignIn={handleSignIn} />}
+      {route.name === "login" && <LoginPage authMessage={authMessage} />}
 
       {user && route.name === "assignments" && (
-        <AssignmentsPage user={user} navigate={navigate} onSignOut={handleSignOut} />
+        <AssignmentsPage
+          user={user}
+          navigate={navigate}
+          onSignOut={handleSignOut}
+          onDeleteAccount={handleDeleteAccount}
+        />
       )}
 
       {user && route.name === "assignment-detail" && (
-        <AssignmentDetailPage user={user} assignmentId={route.assignmentId} navigate={navigate} />
+        <AssignmentDetailPage assignmentId={route.assignmentId} navigate={navigate} />
       )}
 
       {user && route.name === "problem-board" && (
         <ProblemBoardPage
-          user={user}
           assignmentId={route.assignmentId}
           problemIndex={route.problemIndex}
           navigate={navigate}

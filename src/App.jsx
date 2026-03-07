@@ -452,7 +452,11 @@ function App() {
   const route = useMemo(() => parseRoute(path), [path]);
 
   const handleSignOut = useCallback(async () => {
-    await signOut();
+    const { logoutUrl } = await signOut();
+    if (logoutUrl) {
+      window.location.assign(logoutUrl);
+      return;
+    }
     setUser(null);
     navigate("/login", true);
   }, [navigate]);

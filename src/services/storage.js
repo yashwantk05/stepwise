@@ -44,7 +44,7 @@ export const getGoogleSignInUrl = () => {
 };
 
 export const signOut = async () => {
-  await request("/auth/logout", { method: "POST" });
+  return request("/auth/logout", { method: "POST" });
 };
 
 export const requestAccountDeletion = async () => {

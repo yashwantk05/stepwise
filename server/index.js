@@ -1,16 +1,27 @@
 import express from "express";
+import multer from "multer";
 import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createReadSasUrl,
+  deleteBlobIfExists,
+  downloadAssignmentPdfFromBlob,
+  uploadAssignmentPdfToBlob,
+} from "./blobStorage.js";
+import {
   deleteUserData,
   findAssignmentById,
+  getAssignmentPdfByAssignmentId,
   getScene,
   initDb,
   insertAssignment,
+  listAssignmentPdfsForUser,
   listAssignmentsForUser,
+  removeAssignmentPdf,
   removeAssignment,
+  upsertAssignmentPdf,
   upsertScene,
   upsertUser,
 } from "./db.js";
@@ -24,6 +35,12 @@ const distDir = path.resolve(__dirname, "..", "dist");
 const indexFile = path.join(distDir, "index.html");
 let dbReady = false;
 let dbInitError = null;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 20 * 1024 * 1024,
+  },
+});
 
 const getOrigin = (request) => {
   const protocol = request.headers["x-forwarded-proto"] || request.protocol || "https";
@@ -178,6 +195,8 @@ app.post("/api/auth/logout", (request, response) => {
 });
 
 app.delete("/api/account", requireDb, requireAuth, async (request, response) => {
+  const uploadedPdfs = await listAssignmentPdfsForUser(request.user.id);
+  await Promise.all(uploadedPdfs.map((record) => deleteBlobIfExists(record.blobName)));
   await deleteUserData(request.user.id);
   response.status(202).json({ message: "Account deletion request accepted." });
 });
@@ -210,24 +229,158 @@ app.get("/api/assignments/:id", requireDb, requireAuth, async (request, response
 });
 
 app.delete("/api/assignments/:id", requireDb, requireAuth, async (request, response) => {
+  const existingPdf = await getAssignmentPdfByAssignmentId(request.user.id, request.params.id);
+  if (existingPdf) {
+    await deleteBlobIfExists(existingPdf.blobName);
+    await removeAssignmentPdf(request.user.id, request.params.id);
+  }
   await removeAssignment(request.user.id, request.params.id);
   response.status(204).send();
 });
 
-app.get("/api/assignments/:id/pdf", requireDb, requireAuth, (_request, response) => {
-  response.json(null);
+app.get("/api/assignments/:id/pdf", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await getAssignmentPdfByAssignmentId(request.user.id, request.params.id);
+  if (!record) {
+    response.json(null);
+    return;
+  }
+
+  response.json({
+    assignmentId: record.assignmentId,
+    fileName: record.fileName,
+    contentType: record.contentType,
+    size: record.size,
+    uploadedAt: record.uploadedAt,
+    updatedAt: record.updatedAt,
+  });
 });
 
-app.post("/api/assignments/:id/pdf", requireDb, requireAuth, (_request, response) => {
-  response.status(501).json({ message: "PDF upload is not wired yet." });
-});
+app.post(
+  "/api/assignments/:id/pdf",
+  requireDb,
+  requireAuth,
+  upload.single("file"),
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
 
-app.delete("/api/assignments/:id/pdf", requireDb, requireAuth, (_request, response) => {
+    const file = request.file;
+    if (!file) {
+      response.status(400).json({ message: "PDF file is required." });
+      return;
+    }
+
+    if (file.mimetype !== "application/pdf") {
+      response.status(400).json({ message: "Only PDF uploads are supported." });
+      return;
+    }
+
+    const existingRecord = await getAssignmentPdfByAssignmentId(request.user.id, request.params.id);
+    const blobName = await uploadAssignmentPdfToBlob({
+      userId: request.user.id,
+      assignmentId: request.params.id,
+      fileName: file.originalname || "problem-sheet.pdf",
+      contentType: file.mimetype,
+      buffer: file.buffer,
+    });
+
+    let record = null;
+    try {
+      record = await upsertAssignmentPdf({
+        assignmentId: request.params.id,
+        userId: request.user.id,
+        blobName,
+        fileName: file.originalname || "problem-sheet.pdf",
+        contentType: file.mimetype,
+        size: file.size,
+      });
+    } catch (error) {
+      await deleteBlobIfExists(blobName);
+      throw error;
+    }
+
+    if (existingRecord && existingRecord.blobName !== blobName) {
+      await deleteBlobIfExists(existingRecord.blobName);
+    }
+
+    response.status(201).json({
+      assignmentId: record.assignmentId,
+      fileName: record.fileName,
+      contentType: record.contentType,
+      size: record.size,
+      uploadedAt: record.uploadedAt,
+      updatedAt: record.updatedAt,
+    });
+  },
+);
+
+app.delete("/api/assignments/:id/pdf", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await removeAssignmentPdf(request.user.id, request.params.id);
+  if (record) {
+    await deleteBlobIfExists(record.blobName);
+  }
   response.status(204).send();
 });
 
-app.get("/api/assignments/:id/pdf/download", requireDb, requireAuth, (_request, response) => {
-  response.status(404).json({ message: "No PDF uploaded yet." });
+app.get("/api/assignments/:id/pdf/download-url", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await getAssignmentPdfByAssignmentId(request.user.id, request.params.id);
+  if (!record) {
+    response.status(404).json({ message: "No PDF uploaded yet." });
+    return;
+  }
+
+  const url = await createReadSasUrl(record.blobName);
+  if (!url) {
+    response.status(404).json({ message: "Direct download URL is unavailable." });
+    return;
+  }
+  response.json({ url });
+});
+
+app.get("/api/assignments/:id/pdf/download", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await getAssignmentPdfByAssignmentId(request.user.id, request.params.id);
+  if (!record) {
+    response.status(404).json({ message: "No PDF uploaded yet." });
+    return;
+  }
+
+  const blob = await downloadAssignmentPdfFromBlob(record.blobName);
+  if (!blob?.stream) {
+    response.status(404).json({ message: "PDF file is missing from storage." });
+    return;
+  }
+
+  response.setHeader("Content-Type", record.contentType || "application/pdf");
+  response.setHeader("Content-Length", String(blob.contentLength || record.size));
+  response.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(record.fileName)}"`);
+  blob.stream.pipe(response);
 });
 
 app.get(
@@ -258,6 +411,14 @@ app.put(
     response.json(record);
   },
 );
+
+app.use((error, _request, response, next) => {
+  if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
+    response.status(413).json({ message: "PDF exceeds the 20MB upload limit." });
+    return;
+  }
+  next(error);
+});
 
 if (fs.existsSync(indexFile)) {
   app.use(express.static(distDir));

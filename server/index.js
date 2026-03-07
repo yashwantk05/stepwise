@@ -70,19 +70,7 @@ const principalToUser = (principal) => {
 const getAuthenticatedUser = async (request) => {
   const headerPrincipal = parsePrincipalHeader(request.headers["x-ms-client-principal"]);
   const userFromHeader = principalToUser(headerPrincipal);
-  if (userFromHeader) return userFromHeader;
-
-  const origin = getOrigin(request);
-  const response = await fetch(`${origin}/.auth/me`, {
-    headers: {
-      cookie: request.headers.cookie || "",
-    },
-  });
-
-  if (!response.ok) return null;
-  const data = await response.json();
-  const first = Array.isArray(data) ? data[0] : null;
-  return principalToUser(first?.clientPrincipal || first);
+  return userFromHeader;
 };
 
 const requireAuth = async (request, response, next) => {

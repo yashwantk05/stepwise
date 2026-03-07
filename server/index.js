@@ -67,23 +67,42 @@ const principalToUser = (principal) => {
   };
 };
 
-const getAuthenticatedUser = async (request) => {
-  const headerPrincipal = parsePrincipalHeader(request.headers["x-ms-client-principal"]);
-  const userFromHeader = principalToUser(headerPrincipal);
-  return userFromHeader;
+const headersToUser = (request) => {
+  const userId = request.headers["x-ms-client-principal-id"];
+  if (!userId) return null;
+
+  const name = request.headers["x-ms-client-principal-name"] || "User";
+  const provider = request.headers["x-ms-client-principal-idp"] || "";
+  return {
+    id: String(userId),
+    name: String(name),
+    email: String(name),
+    provider: String(provider),
+  };
 };
 
-const requireAuth = async (request, response, next) => {
+const getAuthenticatedUser = async (request) => {
+  const userFromSimpleHeaders = headersToUser(request);
+  if (userFromSimpleHeaders) return userFromSimpleHeaders;
+
+  const headerPrincipal = parsePrincipalHeader(request.headers["x-ms-client-principal"]);
+  const userFromHeader = principalToUser(headerPrincipal);
+  if (userFromHeader) return userFromHeader;
+
   try {
-    const user = await getAuthenticatedUser(request);
-    if (!user) {
-      response.status(401).json({ message: "Not authenticated." });
-      return;
-    }
-    request.user = user;
-    next();
+    const origin = getOrigin(request);
+    const authResponse = await fetch(`${origin}/.auth/me`, {
+      headers: {
+        cookie: request.headers.cookie || "",
+      },
+    });
+
+    if (!authResponse.ok) return null;
+    const payload = await authResponse.json();
+    const first = Array.isArray(payload) ? payload[0] : null;
+    return principalToUser(first?.clientPrincipal || first);
   } catch {
-    response.status(500).json({ message: "Unable to validate authentication state." });
+    return null;
   }
 };
 
@@ -123,16 +142,17 @@ app.post("/api/auth/logout", (request, response) => {
   response.json({ logoutUrl });
 });
 
-app.delete("/api/account", requireAuth, (request, response) => {
-  assignmentsByUser.delete(request.user.id);
+app.delete("/api/account", (_request, response) => {
+  assignmentsByUser.clear();
+  scenesByAssignment.clear();
   response.status(202).json({ message: "Account deletion request accepted." });
 });
 
-app.get("/api/assignments", requireAuth, (request, response) => {
-  response.json(listUserAssignments(request.user.id));
+app.get("/api/assignments", (_request, response) => {
+  response.json(listUserAssignments("default"));
 });
 
-app.post("/api/assignments", requireAuth, (request, response) => {
+app.post("/api/assignments", (request, response) => {
   const title = String(request.body?.title || "").trim();
   if (!title) {
     response.status(400).json({ message: "Title is required." });
@@ -142,19 +162,19 @@ app.post("/api/assignments", requireAuth, (request, response) => {
   const now = Date.now();
   const assignment = {
     id: `assignment-${now}-${Math.random().toString(36).slice(2, 8)}`,
-    userId: request.user.id,
+    userId: "default",
     title,
     createdAt: now,
     updatedAt: now,
   };
 
-  const existing = assignmentsByUser.get(request.user.id) || [];
-  assignmentsByUser.set(request.user.id, [assignment, ...existing]);
+  const existing = assignmentsByUser.get("default") || [];
+  assignmentsByUser.set("default", [assignment, ...existing]);
   response.status(201).json(assignment);
 });
 
-app.get("/api/assignments/:id", requireAuth, (request, response) => {
-  const assignment = listUserAssignments(request.user.id).find(
+app.get("/api/assignments/:id", (request, response) => {
+  const assignment = listUserAssignments("default").find(
     (entry) => entry.id === request.params.id,
   );
   if (!assignment) {
@@ -164,39 +184,39 @@ app.get("/api/assignments/:id", requireAuth, (request, response) => {
   response.json(assignment);
 });
 
-app.delete("/api/assignments/:id", requireAuth, (request, response) => {
-  const existing = listUserAssignments(request.user.id);
+app.delete("/api/assignments/:id", (request, response) => {
+  const existing = listUserAssignments("default");
   const next = existing.filter((entry) => entry.id !== request.params.id);
-  assignmentsByUser.set(request.user.id, next);
+  assignmentsByUser.set("default", next);
   response.status(204).send();
 });
 
-app.get("/api/assignments/:id/pdf", requireAuth, (_request, response) => {
+app.get("/api/assignments/:id/pdf", (_request, response) => {
   response.json(null);
 });
 
-app.post("/api/assignments/:id/pdf", requireAuth, (_request, response) => {
+app.post("/api/assignments/:id/pdf", (_request, response) => {
   response.status(501).json({ message: "PDF upload is not wired yet." });
 });
 
-app.delete("/api/assignments/:id/pdf", requireAuth, (_request, response) => {
+app.delete("/api/assignments/:id/pdf", (_request, response) => {
   response.status(204).send();
 });
 
-app.get("/api/assignments/:id/pdf/download", requireAuth, (_request, response) => {
+app.get("/api/assignments/:id/pdf/download", (_request, response) => {
   response.status(404).json({ message: "No PDF uploaded yet." });
 });
 
-app.get("/api/assignments/:id/problems/:problemIndex/scene", requireAuth, (request, response) => {
-  const key = `${request.user.id}:${request.params.id}:${request.params.problemIndex}`;
+app.get("/api/assignments/:id/problems/:problemIndex/scene", (request, response) => {
+  const key = `default:${request.params.id}:${request.params.problemIndex}`;
   response.json(scenesByAssignment.get(key) || null);
 });
 
-app.put("/api/assignments/:id/problems/:problemIndex/scene", requireAuth, (request, response) => {
-  const key = `${request.user.id}:${request.params.id}:${request.params.problemIndex}`;
+app.put("/api/assignments/:id/problems/:problemIndex/scene", (request, response) => {
+  const key = `default:${request.params.id}:${request.params.problemIndex}`;
   const record = {
     id: key,
-    userId: request.user.id,
+    userId: "default",
     assignmentId: request.params.id,
     problemIndex: Number(request.params.problemIndex),
     scene: request.body?.scene || null,

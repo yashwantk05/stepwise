@@ -29,11 +29,45 @@ const request = async (path, options = {}) => {
   return response.json();
 };
 
+const mapEasyAuthUser = (payload) => {
+  const first = Array.isArray(payload) ? payload[0] : null;
+  const principal = first?.clientPrincipal || first;
+  if (!principal?.userId) return null;
+
+  const claims = Array.isArray(principal.claims) ? principal.claims : [];
+  const readClaim = (...types) =>
+    claims.find((claim) => types.includes(claim.typ))?.val || "";
+
+  return {
+    id: principal.userId,
+    name:
+      readClaim("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") ||
+      principal.userDetails ||
+      "User",
+    email:
+      readClaim(
+        "email",
+        "emails",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+      ) || "",
+    provider: principal.identityProvider || "",
+  };
+};
+
 export const getCurrentUser = async () => {
   try {
     return await request("/auth/me");
   } catch (error) {
-    if (error.status === 401) return null;
+    if (error.status === 401) {
+      try {
+        const response = await fetch("/.auth/me", { credentials: "include" });
+        if (!response.ok) return null;
+        const payload = await response.json();
+        return mapEasyAuthUser(payload);
+      } catch {
+        return null;
+      }
+    }
     throw error;
   }
 };

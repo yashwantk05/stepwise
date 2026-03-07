@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+let cachedUser = null;
 
 const toUrl = (path) => `${API_BASE}${path}`;
 
@@ -16,8 +17,22 @@ const buildError = async (response) => {
 };
 
 const request = async (path, options = {}) => {
+  const userHeaders =
+    cachedUser?.id
+      ? {
+          "x-stepwise-user-id": cachedUser.id,
+          "x-stepwise-user-name": cachedUser.name || "",
+          "x-stepwise-user-email": cachedUser.email || "",
+          "x-stepwise-user-provider": cachedUser.provider || "",
+        }
+      : {};
+
   const response = await fetch(toUrl(path), {
     credentials: "include",
+    headers: {
+      ...userHeaders,
+      ...(options.headers || {}),
+    },
     ...options,
   });
 
@@ -56,14 +71,18 @@ const mapEasyAuthUser = (payload) => {
 
 export const getCurrentUser = async () => {
   try {
-    return await request("/auth/me");
+    const user = await request("/auth/me");
+    cachedUser = user;
+    return user;
   } catch (error) {
     if (error.status === 401) {
       try {
         const response = await fetch("/.auth/me", { credentials: "include" });
         if (!response.ok) return null;
         const payload = await response.json();
-        return mapEasyAuthUser(payload);
+        const user = mapEasyAuthUser(payload);
+        cachedUser = user;
+        return user;
       } catch {
         return null;
       }
@@ -78,10 +97,12 @@ export const getGoogleSignInUrl = () => {
 };
 
 export const signOut = async () => {
+  cachedUser = null;
   return request("/auth/logout", { method: "POST" });
 };
 
 export const requestAccountDeletion = async () => {
+  cachedUser = null;
   await request("/account", { method: "DELETE" });
 };
 

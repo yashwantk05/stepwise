@@ -3,6 +3,17 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  deleteUserData,
+  findAssignmentById,
+  getScene,
+  initDb,
+  insertAssignment,
+  listAssignmentsForUser,
+  removeAssignment,
+  upsertScene,
+  upsertUser,
+} from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,8 +22,8 @@ const app = express();
 const port = Number(globalThis.process?.env?.PORT) || 8080;
 const distDir = path.resolve(__dirname, "..", "dist");
 const indexFile = path.join(distDir, "index.html");
-const assignmentsByUser = new Map();
-const scenesByAssignment = new Map();
+let dbReady = false;
+let dbInitError = null;
 
 const getOrigin = (request) => {
   const protocol = request.headers["x-forwarded-proto"] || request.protocol || "https";
@@ -68,6 +79,16 @@ const principalToUser = (principal) => {
 };
 
 const headersToUser = (request) => {
+  const proxiedUserId = request.headers["x-stepwise-user-id"];
+  if (proxiedUserId) {
+    return {
+      id: String(proxiedUserId),
+      name: String(request.headers["x-stepwise-user-name"] || "User"),
+      email: String(request.headers["x-stepwise-user-email"] || ""),
+      provider: String(request.headers["x-stepwise-user-provider"] || "easy-auth"),
+    };
+  }
+
   const userId = request.headers["x-ms-client-principal-id"];
   if (!userId) return null;
 
@@ -106,9 +127,23 @@ const getAuthenticatedUser = async (request) => {
   }
 };
 
-const listUserAssignments = (userId) => {
-  const records = assignmentsByUser.get(userId) || [];
-  return [...records].sort((left, right) => right.updatedAt - left.updatedAt);
+const requireAuth = async (request, response, next) => {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    response.status(401).json({ message: "Not authenticated." });
+    return;
+  }
+  request.user = user;
+  next();
+};
+
+const requireDb = (_request, response, next) => {
+  if (dbReady) {
+    next();
+    return;
+  }
+  const detail = dbInitError ? ` ${dbInitError.message}` : "";
+  response.status(503).json({ message: `Database is not ready.${detail}`.trim() });
 };
 
 app.get("/api/health", (_request, response) => {
@@ -142,41 +177,31 @@ app.post("/api/auth/logout", (request, response) => {
   response.json({ logoutUrl });
 });
 
-app.delete("/api/account", (_request, response) => {
-  assignmentsByUser.clear();
-  scenesByAssignment.clear();
+app.delete("/api/account", requireDb, requireAuth, async (request, response) => {
+  await deleteUserData(request.user.id);
   response.status(202).json({ message: "Account deletion request accepted." });
 });
 
-app.get("/api/assignments", (_request, response) => {
-  response.json(listUserAssignments("default"));
+app.get("/api/assignments", requireDb, requireAuth, async (request, response) => {
+  await upsertUser(request.user);
+  const records = await listAssignmentsForUser(request.user.id);
+  response.json(records);
 });
 
-app.post("/api/assignments", (request, response) => {
+app.post("/api/assignments", requireDb, requireAuth, async (request, response) => {
   const title = String(request.body?.title || "").trim();
   if (!title) {
     response.status(400).json({ message: "Title is required." });
     return;
   }
 
-  const now = Date.now();
-  const assignment = {
-    id: `assignment-${now}-${Math.random().toString(36).slice(2, 8)}`,
-    userId: "default",
-    title,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const existing = assignmentsByUser.get("default") || [];
-  assignmentsByUser.set("default", [assignment, ...existing]);
+  await upsertUser(request.user);
+  const assignment = await insertAssignment(request.user.id, title);
   response.status(201).json(assignment);
 });
 
-app.get("/api/assignments/:id", (request, response) => {
-  const assignment = listUserAssignments("default").find(
-    (entry) => entry.id === request.params.id,
-  );
+app.get("/api/assignments/:id", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
   if (!assignment) {
     response.status(404).json({ message: "Assignment not found." });
     return;
@@ -184,47 +209,55 @@ app.get("/api/assignments/:id", (request, response) => {
   response.json(assignment);
 });
 
-app.delete("/api/assignments/:id", (request, response) => {
-  const existing = listUserAssignments("default");
-  const next = existing.filter((entry) => entry.id !== request.params.id);
-  assignmentsByUser.set("default", next);
+app.delete("/api/assignments/:id", requireDb, requireAuth, async (request, response) => {
+  await removeAssignment(request.user.id, request.params.id);
   response.status(204).send();
 });
 
-app.get("/api/assignments/:id/pdf", (_request, response) => {
+app.get("/api/assignments/:id/pdf", requireDb, requireAuth, (_request, response) => {
   response.json(null);
 });
 
-app.post("/api/assignments/:id/pdf", (_request, response) => {
+app.post("/api/assignments/:id/pdf", requireDb, requireAuth, (_request, response) => {
   response.status(501).json({ message: "PDF upload is not wired yet." });
 });
 
-app.delete("/api/assignments/:id/pdf", (_request, response) => {
+app.delete("/api/assignments/:id/pdf", requireDb, requireAuth, (_request, response) => {
   response.status(204).send();
 });
 
-app.get("/api/assignments/:id/pdf/download", (_request, response) => {
+app.get("/api/assignments/:id/pdf/download", requireDb, requireAuth, (_request, response) => {
   response.status(404).json({ message: "No PDF uploaded yet." });
 });
 
-app.get("/api/assignments/:id/problems/:problemIndex/scene", (request, response) => {
-  const key = `default:${request.params.id}:${request.params.problemIndex}`;
-  response.json(scenesByAssignment.get(key) || null);
-});
+app.get(
+  "/api/assignments/:id/problems/:problemIndex/scene",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const scene = await getScene(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+    );
+    response.json(scene);
+  },
+);
 
-app.put("/api/assignments/:id/problems/:problemIndex/scene", (request, response) => {
-  const key = `default:${request.params.id}:${request.params.problemIndex}`;
-  const record = {
-    id: key,
-    userId: "default",
-    assignmentId: request.params.id,
-    problemIndex: Number(request.params.problemIndex),
-    scene: request.body?.scene || null,
-    updatedAt: Date.now(),
-  };
-  scenesByAssignment.set(key, record);
-  response.json(record);
-});
+app.put(
+  "/api/assignments/:id/problems/:problemIndex/scene",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const record = await upsertScene(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+      request.body?.scene || null,
+    );
+    response.json(record);
+  },
+);
 
 if (fs.existsSync(indexFile)) {
   app.use(express.static(distDir));
@@ -241,6 +274,20 @@ if (fs.existsSync(indexFile)) {
   });
 }
 
-app.listen(port, () => {
-  console.log(`StepWise server listening on port ${port}`);
-});
+const startServer = async () => {
+  try {
+    await initDb();
+    dbReady = true;
+    console.log("Database initialized.");
+  } catch (error) {
+    dbReady = false;
+    dbInitError = error;
+    console.error("Database initialization failed:", error.message);
+  }
+
+  app.listen(port, () => {
+    console.log(`StepWise server listening on port ${port}`);
+  });
+};
+
+startServer();

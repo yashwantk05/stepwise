@@ -1,4 +1,4 @@
-name: Build and deploy frontend to Azure Web App - stepwise
+name: Build and deploy Node app to Azure Web App - stepwise
 
 on:
   push:
@@ -23,8 +23,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: web-dist
-          path: dist
+          name: app-package
+          path: |
+            dist
+            server
+            package.json
+            package-lock.json
 
   deploy:
     runs-on: ubuntu-latest
@@ -35,8 +39,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: web-dist
-          path: dist
+          name: app-package
+          path: .
 
       - uses: azure/login@v2
         with:
@@ -47,4 +51,4 @@ jobs:
       - uses: azure/webapps-deploy@v3
         with:
           app-name: stepwise
-          package: dist
+          package: .

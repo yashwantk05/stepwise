@@ -1,18 +1,31 @@
-import requests
-import time
 import os
-VISION_ENDPOINT = "https://ai-vision00.cognitiveservices.azure.com/"
-VISION_KEY = "1rOUALmQmxXjkkfN5iVI9ir7cgcGfMZG4lWgqGkrrMB5Kxi26VHOJQQJ99CCACGhslBXJ3w3AAAFACOGMbLc"
+import time
+
+import requests
+
+VISION_ENDPOINT = os.getenv("AZURE_VISION_ENDPOINT", "")
+VISION_KEY = os.getenv("AZURE_VISION_KEY", "")
+
+
+def require_vision_config():
+    if not VISION_ENDPOINT or not VISION_KEY:
+        raise RuntimeError(
+            "Azure Vision is not configured. Set AZURE_VISION_ENDPOINT and AZURE_VISION_KEY."
+        )
+
+    endpoint = VISION_ENDPOINT.rstrip("/")
+    return endpoint, VISION_KEY
 
 def extract_text(image_bytes):
+    endpoint, api_key = require_vision_config()
 
     headers = {
-        "Ocp-Apim-Subscription-Key": VISION_KEY,
+        "Ocp-Apim-Subscription-Key": api_key,
         "Content-Type": "application/octet-stream"
     }
 
     response = requests.post(
-    VISION_ENDPOINT + "vision/v3.2/read/analyze",
+    endpoint + "/vision/v3.2/read/analyze",
     headers=headers,
     data=image_bytes
 )
@@ -23,7 +36,7 @@ def extract_text(image_bytes):
 
         result = requests.get(
             operation_url,
-            headers={"Ocp-Apim-Subscription-Key": VISION_KEY}
+            headers={"Ocp-Apim-Subscription-Key": api_key}
         ).json()
 
         if result["status"] == "succeeded":

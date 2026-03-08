@@ -1,16 +1,65 @@
-# React + Vite
+# StepWise
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This app has:
 
-Currently, two official plugins are available:
+- a Vite React frontend
+- a Node/Express API in `server/index.js`
+- a Python FastAPI AI service in `server/server.py`
+- Azure Postgres, Azure Blob Storage, Azure OpenAI, and Azure Vision integrations
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## Security
 
-## React Compiler
+Credentials must be provided through environment variables. Do not commit `.env` files or hardcode service keys in source files.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Use `.env.example` as the template for local configuration.
 
-## Expanding the ESLint configuration
+If secrets were already committed, rotate them in Azure immediately. Removing them from a later commit does not make the old secrets safe again.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Local Run
+
+Install JavaScript dependencies:
+
+```bash
+npm install
+```
+
+Run the Node API:
+
+```bash
+PORT=8080 npm run dev:server
+```
+
+Run the frontend:
+
+```bash
+npm run dev
+```
+
+Run the Python AI service:
+
+```bash
+cd server
+python3 -m venv .venv
+source .venv/bin/activate
+pip install fastapi uvicorn python-dotenv openai requests python-multipart
+uvicorn server:app --reload --host 0.0.0.0 --port 8000
+```
+
+## Required Environment Variables
+
+Frontend:
+
+- `VITE_API_BASE_URL`
+- `VITE_AI_ANALYZE_URL`
+
+Backend:
+
+- `DATABASE_URL`
+- `AZURE_STORAGE_CONNECTION_STRING` or `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_ACCESS_KEY`
+- `AZURE_STORAGE_CONTAINER`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_MODEL`
+- `AZURE_VISION_ENDPOINT`
+- `AZURE_VISION_KEY`

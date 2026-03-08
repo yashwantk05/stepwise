@@ -1,13 +1,25 @@
-from openai import AzureOpenAI
 import base64
 import os
-client = AzureOpenAI(
-    api_key="GEvGCJR1tzS4VLPB45kCfJCQafpdJAmovA5IGdokC7OSwD5I8x1zJQQJ99CCACYeBjFXJ3w3AAABACOG3FcB",
-    api_version="2024-02-01",
-    azure_endpoint="https://ai-model00.services.ai.azure.com/"
-)
 
-MODEL = "gpt-4o"
+from openai import AzureOpenAI
+
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
+
+
+def get_client():
+    if not AZURE_OPENAI_API_KEY or not AZURE_OPENAI_ENDPOINT:
+        raise RuntimeError(
+            "Azure OpenAI is not configured. Set AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT."
+        )
+
+    return AzureOpenAI(
+        api_key=AZURE_OPENAI_API_KEY,
+        api_version=AZURE_OPENAI_API_VERSION,
+        azure_endpoint=AZURE_OPENAI_ENDPOINT,
+    )
 
 
 def analyze_image(image_bytes):
@@ -40,8 +52,10 @@ Correct next line:
 $n = \frac{5}{5} = 1$
 """
 
+    client = get_client()
+
     response = client.chat.completions.create(
-        model=MODEL,
+        model=AZURE_OPENAI_MODEL,
         temperature=0.3,
         max_tokens=200,
         messages=[

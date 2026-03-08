@@ -2,7 +2,7 @@ name: Build and deploy Node app to Azure Web App - stepwise
 
 on:
   push:
-    branches: [google-auth]
+    branches: ["**"]
   workflow_dispatch:
 
 jobs:
@@ -36,7 +36,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     permissions:
-      id-token: write
       contents: read
     steps:
       - uses: actions/download-artifact@v4
@@ -44,13 +43,8 @@ jobs:
           name: app-package
           path: .
 
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_5DCCFAC7E4954A09889F914199D9F584 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_606CB5FAD3B84B73A529C93FAC8D83DA }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_69D1F1930BCB496797DB8A1DF10B705D }}
-
       - uses: azure/webapps-deploy@v3
         with:
           app-name: stepwise
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
           package: .

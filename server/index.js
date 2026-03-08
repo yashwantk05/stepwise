@@ -436,6 +436,7 @@ if (fs.existsSync(indexFile)) {
 }
 
 const startServer = async () => {
+  console.log("STEPWISE_DEPLOY_MARKER_2026_03_08_BLOB_DB");
   try {
     await initDb();
     dbReady = true;

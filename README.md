@@ -35,6 +35,8 @@ Run the frontend:
 npm run dev
 ```
 
+For localhost auth, the frontend now supports a dev bypass user. It is enabled automatically on localhost in Vite dev mode, or explicitly with `VITE_DEV_AUTH_BYPASS=true`.
+
 Run the Python AI service:
 
 ```bash
@@ -51,6 +53,10 @@ Frontend:
 
 - `VITE_API_BASE_URL`
 - `VITE_AI_ANALYZE_URL`
+- `VITE_DEV_AUTH_BYPASS`
+- `VITE_DEV_USER_ID`
+- `VITE_DEV_USER_NAME`
+- `VITE_DEV_USER_EMAIL`
 
 Backend:
 

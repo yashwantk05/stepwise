@@ -2,6 +2,23 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 let cachedUser = null;
 
 const toUrl = (path) => `${API_BASE}${path}`;
+const normalizeFlag = (value) => String(value || "").trim().toLowerCase();
+const isLocalHost = () =>
+  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+
+const canUseDevBypass = () => {
+  const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
+  if (bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes") return true;
+  if (bypassFlag === "false" || bypassFlag === "0" || bypassFlag === "no") return false;
+  return import.meta.env.DEV && isLocalHost();
+};
+
+const buildDevUser = () => ({
+  id: String(import.meta.env.VITE_DEV_USER_ID || "local-dev-user"),
+  name: String(import.meta.env.VITE_DEV_USER_NAME || "Local Developer"),
+  email: String(import.meta.env.VITE_DEV_USER_EMAIL || "local-dev@stepwise.local"),
+  provider: "local-dev",
+});
 
 const buildError = async (response) => {
   let message = `Request failed (${response.status}).`;
@@ -84,6 +101,11 @@ export const getCurrentUser = async () => {
         cachedUser = user;
         return user;
       } catch {
+        if (canUseDevBypass()) {
+          const devUser = buildDevUser();
+          cachedUser = devUser;
+          return devUser;
+        }
         return null;
       }
     }
@@ -97,6 +119,10 @@ export const getGoogleSignInUrl = () => {
 };
 
 export const signOut = async () => {
+  if (cachedUser?.provider === "local-dev") {
+    cachedUser = null;
+    return { logoutUrl: null };
+  }
   cachedUser = null;
   return request("/auth/logout", { method: "POST" });
 };

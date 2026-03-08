@@ -28,6 +28,24 @@ const getDefaultScene = () => ({
   files: {},
 });
 
+const getPersistedScene = (scene) => {
+  const normalizedElements = Array.isArray(scene?.elements) ? scene.elements : [];
+  const normalizedFiles =
+    scene?.files && typeof scene.files === "object" && !Array.isArray(scene.files)
+      ? scene.files
+      : {};
+  const viewBackgroundColor =
+    typeof scene?.appState?.viewBackgroundColor === "string"
+      ? scene.appState.viewBackgroundColor
+      : "#f8fafc";
+
+  return {
+    elements: normalizedElements,
+    appState: { viewBackgroundColor },
+    files: normalizedFiles,
+  };
+};
+
 const formatDate = (time) => new Date(time).toLocaleString();
 
 const parseRoute = (path) => {
@@ -308,8 +326,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [status, setStatus] = useState("Loading whiteboard...");
   const [hint, setHint] = useState("Start drawing to receive hints.");
-  const [excalidrawAPI, setExcalidrawAPI] = useState(null);
   const [initialScene, setInitialScene] = useState(getDefaultScene());
+  const [sceneRevision, setSceneRevision] = useState(0);
   const latestSceneRef = useRef(getDefaultScene());
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
@@ -318,10 +336,11 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     const loadData = async () => {
       const target = await getAssignmentById(assignmentId);
       const storedScene = await getProblemScene(assignmentId, problemIndex);
-      const scene = storedScene?.scene || getDefaultScene();
+      const scene = getPersistedScene(storedScene?.scene || getDefaultScene());
 
       setAssignment(target);
       setInitialScene(scene);
+      setSceneRevision((revision) => revision + 1);
       latestSceneRef.current = scene;
       setHint("Start drawing to receive hints.");
       lastSnapshotRef.current = null;
@@ -334,11 +353,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
     loadData().catch(() => setStatus("Unable to load whiteboard."));
   }, [assignmentId, problemIndex]);
-
-  useEffect(() => {
-    if (!excalidrawAPI) return;
-    excalidrawAPI.updateScene(initialScene);
-  }, [excalidrawAPI, initialScene]);
 
   const blobToBase64 = useCallback(
     (blob) =>
@@ -383,7 +397,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   );
 
   const handleChange = useCallback((elements, appState, files) => {
-    latestSceneRef.current = { elements, appState, files };
+    latestSceneRef.current = getPersistedScene({ elements, appState, files });
     if (analyzeTimerRef.current) {
       window.clearTimeout(analyzeTimerRef.current);
     }
@@ -437,7 +451,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
       <section className="canvas-area">
         <Excalidraw
-          excalidrawAPI={setExcalidrawAPI}
+          key={`${assignmentId}-${problemIndex}-${sceneRevision}`}
+          initialData={initialScene}
           onChange={handleChange}
           UIOptions={{
             canvasActions: {

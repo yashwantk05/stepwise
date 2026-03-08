@@ -4,7 +4,7 @@ This app has:
 
 - a Vite React frontend
 - a Node/Express API in `server/index.js`
-- a Python FastAPI AI service in `server/server.py`
+- an optional Python FastAPI AI service in `server/server.py` for local experimentation
 - Azure Postgres, Azure Blob Storage, Azure OpenAI, and Azure Vision integrations
 
 ## Security
@@ -37,7 +37,7 @@ npm run dev
 
 For localhost auth, the frontend now supports a dev bypass user. It is enabled automatically on localhost in Vite dev mode, or explicitly with `VITE_DEV_AUTH_BYPASS=true`.
 
-Run the Python AI service:
+Run the optional Python AI service only if you explicitly want the standalone FastAPI path:
 
 ```bash
 cd server
@@ -52,7 +52,7 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 Frontend:
 
 - `VITE_API_BASE_URL`
-- `VITE_AI_ANALYZE_URL`
+- `VITE_AI_ANALYZE_URL` (defaults to `/api/ai/analyze`)
 - `VITE_DEV_AUTH_BYPASS`
 - `VITE_DEV_USER_ID`
 - `VITE_DEV_USER_NAME`

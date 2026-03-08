@@ -5,7 +5,7 @@ from openai import AzureOpenAI
 
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-06")
 AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL", "gpt-4o")
 
 
@@ -24,7 +24,7 @@ def get_client():
 
 def analyze_image(image_bytes):
 
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    base64_image = base64.b64encode(image_bytes).decode("utf-8").replace("\n", "")
 
     prompt = """
 You are a strict math tutor checking a student's handwritten algebra solution.

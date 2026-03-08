@@ -45,6 +45,92 @@ const upload = multer({
   },
 });
 
+const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
+const readEnv = (name) => String(globalThis.process?.env?.[name] || "").trim();
+
+const analyzeDrawingWithAzure = async (buffer) => {
+  const endpoint = trimTrailingSlash(readEnv("AZURE_OPENAI_ENDPOINT"));
+  const apiKey = readEnv("AZURE_OPENAI_API_KEY");
+  const apiVersion = readEnv("AZURE_OPENAI_API_VERSION") || "2024-02-01";
+  const deployment =
+    readEnv("AZURE_OPENAI_MODEL") ||
+    readEnv("AZURE_OPENAI_DEPLOYMENT") ||
+    readEnv("AZURE_OPENAI_DEPLOYMENT_NAME");
+
+  const missing = [];
+  if (!endpoint) missing.push("AZURE_OPENAI_ENDPOINT");
+  if (!apiKey) missing.push("AZURE_OPENAI_API_KEY");
+  if (!deployment) missing.push("AZURE_OPENAI_MODEL (or AZURE_OPENAI_DEPLOYMENT)");
+
+  if (missing.length > 0) {
+    throw new Error(`Azure OpenAI is not configured. Missing: ${missing.join(", ")}`);
+  }
+
+  const response = await fetch(
+    `${endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": apiKey,
+      },
+      body: JSON.stringify({
+        temperature: 0.3,
+        max_tokens: 200,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `
+You are a strict math tutor checking a student's handwritten algebra solution.
+
+Look carefully at the image and determine the student's steps.
+
+Steps:
+1. Identify the equations written by the student.
+2. Verify whether the transformation between steps is mathematically valid.
+3. If incorrect, explain the mistake.
+4. Provide the correct next step.
+
+Rules:
+- Always verify the algebra.
+- Never assume the student is correct.
+- Explanations must be short (max 2 sentences).
+- ALL mathematical expressions MUST be written in LaTeX using $...$.
+
+Example format:
+
+Hint:
+The subtraction step is correct, but the next equation is wrong.
+
+Correct next line:
+$n = \\frac{5}{5} = 1$
+                `.trim(),
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${buffer.toString("base64")}`,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`Azure OpenAI request failed (${response.status}). ${detail}`.trim());
+  }
+
+  const payload = await response.json();
+  return payload?.choices?.[0]?.message?.content?.trim() || "No hint available yet.";
+};
+
 const getOrigin = (request) => {
   const protocol = request.headers["x-forwarded-proto"] || request.protocol || "https";
   return `${protocol}://${request.get("host")}`;
@@ -171,6 +257,22 @@ app.get("/api/health", (_request, response) => {
 });
 
 app.use(express.json({ limit: "2mb" }));
+
+app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, response) => {
+  const file = request.file;
+  if (!file) {
+    response.status(400).json({ message: "Drawing image is required." });
+    return;
+  }
+
+  try {
+    const result = await analyzeDrawingWithAzure(file.buffer);
+    response.json({ result });
+  } catch (error) {
+    console.error("AI analyze failed:", error.message);
+    response.status(503).json({ result: "AI tutor temporarily unavailable." });
+  }
+});
 
 app.get("/api/auth/google/login", (request, response) => {
   const returnTo = getSafeReturnUrl(request, request.query.returnTo, "/assignments");
@@ -476,6 +578,15 @@ if (fs.existsSync(indexFile)) {
 
 const startServer = async () => {
   console.log("STEPWISE_DEPLOY_MARKER_2026_03_08_BLOB_DB");
+  console.log("Azure OpenAI env check:", {
+    hasEndpoint: Boolean(readEnv("AZURE_OPENAI_ENDPOINT")),
+    hasApiKey: Boolean(readEnv("AZURE_OPENAI_API_KEY")),
+    hasDeployment:
+      Boolean(readEnv("AZURE_OPENAI_MODEL")) ||
+      Boolean(readEnv("AZURE_OPENAI_DEPLOYMENT")) ||
+      Boolean(readEnv("AZURE_OPENAI_DEPLOYMENT_NAME")),
+    apiVersion: readEnv("AZURE_OPENAI_API_VERSION") || "2024-02-01",
+  });
   try {
     await initDb();
     dbReady = true;

@@ -8,7 +8,9 @@ import {
   createReadSasUrl,
   deleteBlobIfExists,
   downloadAssignmentPdfFromBlob,
+  downloadProblemSceneFromBlob,
   uploadAssignmentPdfToBlob,
+  uploadProblemSceneToBlob,
 } from "./blobStorage.js";
 import {
   deleteUserData,
@@ -19,6 +21,7 @@ import {
   insertAssignment,
   listAssignmentPdfsForUser,
   listAssignmentsForUser,
+  listSceneBlobNamesForAssignment,
   removeAssignmentPdf,
   removeAssignment,
   upsertAssignmentPdf,
@@ -234,6 +237,12 @@ app.delete("/api/assignments/:id", requireDb, requireAuth, async (request, respo
     await deleteBlobIfExists(existingPdf.blobName);
     await removeAssignmentPdf(request.user.id, request.params.id);
   }
+
+  const sceneBlobNames = await listSceneBlobNamesForAssignment(request.user.id, request.params.id);
+  if (sceneBlobNames.length > 0) {
+    await Promise.all(sceneBlobNames.map((blobName) => deleteBlobIfExists(blobName)));
+  }
+
   await removeAssignment(request.user.id, request.params.id);
   response.status(204).send();
 });
@@ -388,12 +397,33 @@ app.get(
   requireDb,
   requireAuth,
   async (request, response) => {
-    const scene = await getScene(
+    const record = await getScene(
       request.user.id,
       request.params.id,
       Number(request.params.problemIndex),
     );
-    response.json(scene);
+
+    if (!record) {
+      response.json(null);
+      return;
+    }
+
+    let resolvedScene = record.scene;
+    if (record.blobName) {
+      try {
+        const sceneFromBlob = await downloadProblemSceneFromBlob(record.blobName);
+        if (sceneFromBlob != null) {
+          resolvedScene = sceneFromBlob;
+        }
+      } catch {
+        // Fall back to DB JSON if blob retrieval/parsing fails.
+      }
+    }
+
+    response.json({
+      ...record,
+      scene: resolvedScene,
+    });
   },
 );
 
@@ -402,11 +432,20 @@ app.put(
   requireDb,
   requireAuth,
   async (request, response) => {
+    const scene = request.body?.scene || null;
+    const blob = await uploadProblemSceneToBlob({
+      userId: request.user.id,
+      assignmentId: request.params.id,
+      problemIndex: Number(request.params.problemIndex),
+      scene,
+    });
+
     const record = await upsertScene(
       request.user.id,
       request.params.id,
       Number(request.params.problemIndex),
-      request.body?.scene || null,
+      scene,
+      blob,
     );
     response.json(record);
   },

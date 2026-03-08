@@ -1,4 +1,5 @@
 import { BlobSASPermissions, BlobServiceClient, StorageSharedKeyCredential } from "@azure/storage-blob";
+import { Buffer } from "node:buffer";
 
 const CONNECTION_STRING = globalThis.process?.env?.AZURE_STORAGE_CONNECTION_STRING || "";
 const ACCOUNT_NAME = globalThis.process?.env?.AZURE_STORAGE_ACCOUNT || "";
@@ -22,6 +23,13 @@ const createBlobName = (userId, assignmentId, originalFileName) => {
   const safeFile = sanitize(originalFileName, "problem-sheet");
   const now = Date.now();
   return `${safeUser}/${safeAssignment}/${now}-${safeFile}.pdf`;
+};
+
+const createSceneBlobName = (userId, assignmentId, problemIndex) => {
+  const safeUser = sanitize(userId, "user");
+  const safeAssignment = sanitize(assignmentId, "assignment");
+  const safeProblem = Number(problemIndex) || 1;
+  return `${safeUser}/${safeAssignment}/problem-${safeProblem}.excalidraw`;
 };
 
 const getBlobServiceClient = () => {
@@ -102,4 +110,46 @@ export const createReadSasUrl = async (blobName, expiresInMinutes = 15) => {
   } catch {
     return null;
   }
+};
+
+export const uploadProblemSceneToBlob = async ({
+  userId,
+  assignmentId,
+  problemIndex,
+  scene,
+}) => {
+  const container = await requireContainer();
+  const blobName = createSceneBlobName(userId, assignmentId, problemIndex);
+  const blobClient = container.getBlockBlobClient(blobName);
+  const serializedScene = JSON.stringify(scene || null);
+  const buffer = Buffer.from(serializedScene, "utf-8");
+  await blobClient.uploadData(buffer, {
+    blobHTTPHeaders: {
+      blobContentType: "application/vnd.excalidraw+json",
+    },
+  });
+  return {
+    blobName,
+    fileName: `problem-${Number(problemIndex) || 1}.excalidraw`,
+    contentType: "application/vnd.excalidraw+json",
+    size: buffer.length,
+  };
+};
+
+export const downloadProblemSceneFromBlob = async (blobName) => {
+  const container = await requireContainer();
+  const blobClient = container.getBlobClient(blobName);
+  const exists = await blobClient.exists();
+  if (!exists) return null;
+
+  const response = await blobClient.download();
+  const chunks = [];
+  if (!response.readableStreamBody) return null;
+
+  for await (const chunk of response.readableStreamBody) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  const body = Buffer.concat(chunks).toString("utf-8");
+  return JSON.parse(body);
 };

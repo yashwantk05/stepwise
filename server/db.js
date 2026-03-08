@@ -81,8 +81,29 @@ export const initDb = async () => {
         assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
         problem_index INTEGER NOT NULL,
         scene JSONB NOT NULL,
+        blob_name TEXT,
+        file_name TEXT,
+        content_type TEXT,
+        size BIGINT,
         updated_at BIGINT NOT NULL
       );
+    `);
+
+    await activePool.query(`
+      ALTER TABLE problem_scenes
+      ADD COLUMN IF NOT EXISTS blob_name TEXT;
+    `);
+    await activePool.query(`
+      ALTER TABLE problem_scenes
+      ADD COLUMN IF NOT EXISTS file_name TEXT;
+    `);
+    await activePool.query(`
+      ALTER TABLE problem_scenes
+      ADD COLUMN IF NOT EXISTS content_type TEXT;
+    `);
+    await activePool.query(`
+      ALTER TABLE problem_scenes
+      ADD COLUMN IF NOT EXISTS size BIGINT;
     `);
 
     await activePool.query(`
@@ -268,7 +289,7 @@ export const getScene = async (userId, assignmentId, problemIndex) => {
   const sceneId = `${userId}:${assignmentId}:${problemIndex}`;
   const { rows } = await getPool().query(
     `
-      SELECT id, user_id, assignment_id, problem_index, scene, updated_at
+      SELECT id, user_id, assignment_id, problem_index, scene, blob_name, file_name, content_type, size, updated_at
       FROM problem_scenes
       WHERE id = $1
       LIMIT 1;
@@ -283,25 +304,50 @@ export const getScene = async (userId, assignmentId, problemIndex) => {
     assignmentId: row.assignment_id,
     problemIndex: Number(row.problem_index),
     scene: row.scene,
+    blobName: row.blob_name || null,
+    fileName: row.file_name || null,
+    contentType: row.content_type || null,
+    size: row.size != null ? Number(row.size) : null,
     updatedAt: Number(row.updated_at),
   };
 };
 
-export const upsertScene = async (userId, assignmentId, problemIndex, scene) => {
+export const upsertScene = async (
+  userId,
+  assignmentId,
+  problemIndex,
+  scene,
+  { blobName = null, fileName = null, contentType = null, size = null } = {},
+) => {
   const sceneId = `${userId}:${assignmentId}:${problemIndex}`;
   const now = Date.now();
   await getPool().query(
     `
       INSERT INTO problem_scenes (
-        id, user_id, assignment_id, problem_index, scene, updated_at
+        id, user_id, assignment_id, problem_index, scene, blob_name, file_name, content_type, size, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
       ON CONFLICT (id)
       DO UPDATE SET
         scene = EXCLUDED.scene,
+        blob_name = EXCLUDED.blob_name,
+        file_name = EXCLUDED.file_name,
+        content_type = EXCLUDED.content_type,
+        size = EXCLUDED.size,
         updated_at = EXCLUDED.updated_at;
     `,
-    [sceneId, userId, assignmentId, problemIndex, JSON.stringify(scene || null), now],
+    [
+      sceneId,
+      userId,
+      assignmentId,
+      problemIndex,
+      JSON.stringify(scene || null),
+      blobName,
+      fileName,
+      contentType,
+      size,
+      now,
+    ],
   );
   return {
     id: sceneId,
@@ -309,8 +355,26 @@ export const upsertScene = async (userId, assignmentId, problemIndex, scene) => 
     assignmentId,
     problemIndex,
     scene: scene || null,
+    blobName,
+    fileName,
+    contentType,
+    size,
     updatedAt: now,
   };
+};
+
+export const listSceneBlobNamesForAssignment = async (userId, assignmentId) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT blob_name
+      FROM problem_scenes
+      WHERE user_id = $1 AND assignment_id = $2 AND blob_name IS NOT NULL;
+    `,
+    [userId, assignmentId],
+  );
+  return rows
+    .map((row) => row.blob_name)
+    .filter((blobName) => typeof blobName === "string" && blobName.length > 0);
 };
 
 export const deleteUserData = async (userId) => {

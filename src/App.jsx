@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Excalidraw, MainMenu } from "@excalidraw/excalidraw";
+import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
 import "@excalidraw/excalidraw/index.css";
 import "./App.css";
+import { analyzeDrawing } from "./services/ai";
 import {
   createAssignment,
   deleteAssignment,
@@ -306,9 +307,12 @@ function AssignmentDetailPage({ assignmentId, navigate }) {
 function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [status, setStatus] = useState("Loading whiteboard...");
+  const [hint, setHint] = useState("Start drawing to receive hints.");
   const [excalidrawAPI, setExcalidrawAPI] = useState(null);
   const [initialScene, setInitialScene] = useState(getDefaultScene());
   const latestSceneRef = useRef(getDefaultScene());
+  const analyzeTimerRef = useRef(null);
+  const lastSnapshotRef = useRef(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -319,6 +323,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       setAssignment(target);
       setInitialScene(scene);
       latestSceneRef.current = scene;
+      setHint("Start drawing to receive hints.");
+      lastSnapshotRef.current = null;
       setStatus(
         storedScene
           ? `Last saved ${formatDate(storedScene.updatedAt)}.`
@@ -334,9 +340,66 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     excalidrawAPI.updateScene(initialScene);
   }, [excalidrawAPI, initialScene]);
 
+  const blobToBase64 = useCallback(
+    (blob) =>
+      new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      }),
+    [],
+  );
+
+  const analyzeSceneForHint = useCallback(
+    async (elements, appState, files) => {
+      if (elements.length === 0) {
+        setHint("Start drawing to receive hints.");
+        return;
+      }
+
+      const canvas = await exportToCanvas({
+        elements,
+        appState,
+        files,
+      });
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) return;
+
+      const base64 = await blobToBase64(blob);
+      if (base64 === lastSnapshotRef.current) return;
+      lastSnapshotRef.current = base64;
+
+      setHint("Generating hint...");
+      try {
+        const result = await analyzeDrawing(blob);
+        const nextHint = typeof result?.result === "string" ? result.result.trim() : "";
+        setHint(nextHint || "No hint available yet.");
+      } catch {
+        setHint("Hint service unavailable.");
+      }
+    },
+    [blobToBase64],
+  );
+
   const handleChange = useCallback((elements, appState, files) => {
     latestSceneRef.current = { elements, appState, files };
-  }, []);
+    if (analyzeTimerRef.current) {
+      window.clearTimeout(analyzeTimerRef.current);
+    }
+    analyzeTimerRef.current = window.setTimeout(() => {
+      void analyzeSceneForHint(elements, appState, files);
+    }, 3000);
+  }, [analyzeSceneForHint]);
+
+  useEffect(
+    () => () => {
+      if (analyzeTimerRef.current) {
+        window.clearTimeout(analyzeTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const handleSave = async () => {
     await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
@@ -395,6 +458,11 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
             <MainMenu.DefaultItems.ChangeCanvasBackground />
           </MainMenu>
         </Excalidraw>
+      </section>
+
+      <section className="panel">
+        <h2>AI Study Buddy</h2>
+        <p className="subtle">{hint}</p>
       </section>
     </>
   );

@@ -6,7 +6,7 @@ name: Build and deploy Node.js app to Azure Web App - stepwise
 on:
   push:
     branches:
-      - database
+      - dev
   workflow_dispatch:
 
 jobs:
@@ -29,11 +29,6 @@ jobs:
           npm run build --if-present
           npm run test --if-present
 
-      - name: Verify deployment marker exists in source
-        run: |
-          echo "Commit SHA: $GITHUB_SHA"
-          grep -n "STEPWISE_DEPLOY_MARKER_2026_03_08_BLOB_DB" server/index.js
-
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
@@ -52,16 +47,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: node-app
-
-      - name: Verify deployment marker exists in artifact
-        run: grep -n "STEPWISE_DEPLOY_MARKER_2026_03_08_BLOB_DB" server/index.js
       
       - name: Login to Azure
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_2E1607FC347E4F36AA50A46F095FBFA4 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_671AF40BCEEF460CA11B182B056D649A }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_7C6D9292F3E947618E566CE19B8BA7C8 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_0005B6639AFA42A99B5C8166397CDC0E }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_ACC8A25210E44791AC4CED6005022DCF }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_45E02192D34446D2B91597CB6967F18E }}
 
       - name: 'Deploy to Azure Web App'
         id: deploy-to-webapp

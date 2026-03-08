@@ -2,7 +2,23 @@ import pg from "pg";
 
 const { Pool } = pg;
 
-const DATABASE_URL = globalThis.process?.env?.DATABASE_URL || "";
+const readDatabaseUrl = () => {
+  const directUrl = globalThis.process?.env?.DATABASE_URL || "";
+  if (directUrl) return directUrl;
+
+  const host = globalThis.process?.env?.AZURE_POSTGRESQL_HOST || "";
+  const port = globalThis.process?.env?.AZURE_POSTGRESQL_PORT || "5432";
+  const database = globalThis.process?.env?.AZURE_POSTGRESQL_DATABASE || "";
+  const user = globalThis.process?.env?.AZURE_POSTGRESQL_USER || "";
+  const password = globalThis.process?.env?.AZURE_POSTGRESQL_PASSWORD || "";
+  const azureSsl = String(globalThis.process?.env?.AZURE_POSTGRESQL_SSL || "").toLowerCase();
+
+  if (!host || !database || !user || !password) return "";
+
+  const query = azureSsl === "disable" ? "" : "?sslmode=require";
+  return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${database}${query}`;
+};
+
 const SSL_MODE =
   globalThis.process?.env?.PGSSL === "disable"
     ? false
@@ -12,16 +28,20 @@ let pool = null;
 let initPromise = null;
 
 const requireDatabaseUrl = () => {
-  if (!DATABASE_URL) {
-    throw new Error("DATABASE_URL is not set.");
+  const databaseUrl = readDatabaseUrl();
+  if (!databaseUrl) {
+    throw new Error(
+      "Database config is missing. Set DATABASE_URL or AZURE_POSTGRESQL_HOST/PORT/DATABASE/USER/PASSWORD.",
+    );
   }
+  return databaseUrl;
 };
 
 export const getPool = () => {
-  requireDatabaseUrl();
+  const databaseUrl = requireDatabaseUrl();
   if (!pool) {
     pool = new Pool({
-      connectionString: DATABASE_URL,
+      connectionString: databaseUrl,
       ssl: SSL_MODE,
     });
   }

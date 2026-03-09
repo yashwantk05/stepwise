@@ -190,6 +190,7 @@ button.outline {
 }
 
 .canvas-area {
+  height: 70vh;
   min-height: 70vh;
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -372,6 +373,11 @@ button.outline {
   min-width: 110px;
 }
 @media (max-width: 860px) {
+  .canvas-area {
+    height: 62vh;
+    min-height: 62vh;
+  }
+
   .whiteboard-stage {
     grid-template-columns: 1fr;
   }

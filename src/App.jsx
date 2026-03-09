@@ -726,14 +726,14 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
       setHint("Generating hint...");
       try {
-        const result = await analyzeDrawing(blob);
+        const result = await analyzeDrawing(blob, { assignmentId, problemIndex });
         const nextHint = typeof result?.result === "string" ? result.result.trim() : "";
         setHint(nextHint || "No hint available yet.");
       } catch {
         setHint("Hint service unavailable.");
       }
     },
-    [blobToBase64],
+    [assignmentId, blobToBase64, problemIndex],
   );
 
   const handleChange = useCallback((elements, appState, files) => {
@@ -830,7 +830,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       await saveProblemImage(assignmentId, problemIndex, imageFile);
       await loadProblemImage();
       closePicker();
-      setStatus(`Saved problem image at ${new Date().toLocaleTimeString()}.`);
+      setStatus(`Saved problem image and refreshed context at ${new Date().toLocaleTimeString()}.`);
     } catch {
       setPickerStatus("Unable to save cropped image.");
     } finally {

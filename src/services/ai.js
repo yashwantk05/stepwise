@@ -23,9 +23,15 @@ const buildDevHeaders = () => {
   };
 };
 
-export async function analyzeDrawing(blob) {
+export async function analyzeDrawing(blob, { assignmentId, problemIndex } = {}) {
   const formData = new FormData();
   formData.append("file", blob, "drawing.png");
+  if (assignmentId) {
+    formData.append("assignmentId", assignmentId);
+  }
+  if (Number.isInteger(problemIndex)) {
+    formData.append("problemIndex", String(problemIndex));
+  }
 
   const endpoint = import.meta.env.VITE_AI_ANALYZE_URL || `${API_BASE}/ai/analyze`;
   const response = await fetch(endpoint, {

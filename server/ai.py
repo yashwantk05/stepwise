@@ -22,56 +22,123 @@ def get_client():
     )
 
 
-def analyze_image(image_bytes):
-
+def _image_url_content_part(image_bytes, mime_type="image/png"):
     base64_image = base64.b64encode(image_bytes).decode("utf-8").replace("\n", "")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime_type};base64,{base64_image}"},
+    }
 
+
+def generate_problem_context(problem_image_bytes, mime_type="image/png"):
+    """
+    Build reusable context by solving the problem shown in the cropped problem image.
+    """
     prompt = """
-You are a strict math tutor checking a student's handwritten algebra solution.
+You are solving a math problem from the provided image before tutoring begins.
 
-Look carefully at the image and determine the student's steps.
+Tasks:
+1. Read the problem carefully.
+2. Solve it fully.
+3. Produce reusable tutoring context for future hints.
 
-Steps:
-1. Identify the equations written by the student.
-2. Verify whether the transformation between steps is mathematically valid.
-3. If incorrect, explain the mistake.
-4. Provide the correct next step.
+Return exactly these sections:
+Problem:
+<one sentence summary>
+
+Goal:
+<what the student must find or prove>
+
+Solved answer:
+<final answer>
+
+Key steps:
+1. <step>
+2. <step>
+3. <step>
+
+Pitfalls:
+1. <pitfall>
+2. <pitfall>
 
 Rules:
-- Always verify the algebra.
-- Never assume the student is correct.
-- Explanations must be short (max 2 sentences).
+- Be concise and precise.
+- If text is unclear, say what you infer.
 - ALL mathematical expressions MUST be written in LaTeX using $...$.
-
-Example format:
-
-Hint:
-The subtraction step is correct, but the next equation is wrong.
-
-Correct next line:
-$n = \frac{5}{5} = 1$
-"""
+""".strip()
 
     client = get_client()
-
     response = client.chat.completions.create(
         model=AZURE_OPENAI_MODEL,
-        temperature=0.3,
-        max_tokens=200,
+        temperature=0.2,
+        max_tokens=350,
         messages=[
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}"
-                        }
-                    }
+                    _image_url_content_part(problem_image_bytes, mime_type),
                 ],
             }
         ],
     )
+    return (response.choices[0].message.content or "").strip()
 
-    return response.choices[0].message.content
+
+def analyze_image(
+    drawing_image_bytes,
+    *,
+    drawing_mime_type="image/png",
+    problem_context="",
+    problem_image_bytes=None,
+    problem_mime_type="image/png",
+):
+    """
+    Generate a hint from the student's drawing, optionally grounded by:
+    1) precomputed problem_context
+    2) the cropped problem image itself
+    """
+    prompt = f"""
+You are a strict math tutor checking a student's handwritten solution.
+
+Stored problem context:
+{problem_context or "No stored problem context is available."}
+
+Tasks:
+1. Identify the student's current work from the drawing image.
+2. Compare it against the stored problem context and expected solution path.
+3. Verify whether the latest visible step is valid.
+4. If incorrect, explain the mistake briefly.
+5. Provide the best next hint, not the full solution.
+
+Rules:
+- Prefer a minimal next-step hint.
+- Never assume the student is correct.
+- If the drawing is too incomplete, say what to do next.
+- Explanations must be short (max 2 sentences).
+- ALL mathematical expressions MUST be written in LaTeX using $...$.
+
+Format:
+Hint:
+<short hint>
+
+Correct next line:
+<next mathematical line or "Not enough work shown yet.">
+""".strip()
+
+    content = [{"type": "text", "text": prompt}]
+    if problem_image_bytes is not None:
+        content.append({"type": "text", "text": "Reference problem image:"})
+        content.append(_image_url_content_part(problem_image_bytes, problem_mime_type))
+
+    content.append({"type": "text", "text": "Student whiteboard image:"})
+    content.append(_image_url_content_part(drawing_image_bytes, drawing_mime_type))
+
+    client = get_client()
+    response = client.chat.completions.create(
+        model=AZURE_OPENAI_MODEL,
+        temperature=0.3,
+        max_tokens=220,
+        messages=[{"role": "user", "content": content}],
+    )
+    return (response.choices[0].message.content or "").strip()

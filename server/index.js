@@ -8,6 +8,7 @@ import {
   createReadSasUrl,
   deleteBlobIfExists,
   downloadAssignmentPdfFromBlob,
+  downloadProblemImageBufferFromBlob,
   downloadProblemImageFromBlob,
   downloadProblemSceneFromBlob,
   uploadAssignmentPdfToBlob,
@@ -18,6 +19,7 @@ import {
   deleteUserData,
   findAssignmentById,
   getAssignmentPdfByAssignmentId,
+  getProblemContext,
   getProblemImage,
   getScene,
   initDb,
@@ -28,10 +30,12 @@ import {
   listAssignmentsForUser,
   listSceneBlobNamesForAssignment,
   removeProblemImage,
+  removeProblemContext,
   removeScene,
   removeAssignmentPdf,
   removeAssignment,
   setAssignmentProblemCount,
+  upsertProblemContext,
   upsertProblemImage,
   upsertAssignmentPdf,
   upsertScene,
@@ -66,7 +70,7 @@ const MAX_PROBLEM_COUNT = 60;
 const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
 const readEnv = (name) => String(globalThis.process?.env?.[name] || "").trim();
 
-const analyzeDrawingWithAzure = async (buffer) => {
+const getAzureConfig = () => {
   const endpoint = trimTrailingSlash(readEnv("AZURE_OPENAI_ENDPOINT"));
   const apiKey = readEnv("AZURE_OPENAI_API_KEY");
   const apiVersion = readEnv("AZURE_OPENAI_API_VERSION") || "2024-02-01";
@@ -84,6 +88,23 @@ const analyzeDrawingWithAzure = async (buffer) => {
     throw new Error(`Azure OpenAI is not configured. Missing: ${missing.join(", ")}`);
   }
 
+  return {
+    endpoint,
+    apiKey,
+    apiVersion,
+    deployment,
+  };
+};
+
+const createImageUrlPart = (buffer, mimeType = "image/png") => ({
+  type: "image_url",
+  image_url: {
+    url: `data:${mimeType};base64,${buffer.toString("base64")}`,
+  },
+});
+
+const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperature = 0.3 }) => {
+  const { endpoint, apiKey, apiVersion, deployment } = getAzureConfig();
   const response = await fetch(
     `${endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`,
     {
@@ -93,49 +114,9 @@ const analyzeDrawingWithAzure = async (buffer) => {
         "api-key": apiKey,
       },
       body: JSON.stringify({
-        temperature: 0.3,
-        max_tokens: 200,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `
-You are a strict math tutor checking a student's handwritten algebra solution.
-
-Look carefully at the image and determine the student's steps.
-
-Steps:
-1. Identify the equations written by the student.
-2. Verify whether the transformation between steps is mathematically valid.
-3. If incorrect, explain the mistake.
-4. Provide the correct next step.
-
-Rules:
-- Always verify the algebra.
-- Never assume the student is correct.
-- Explanations must be short (max 2 sentences).
-- ALL mathematical expressions MUST be written in LaTeX using $...$.
-
-Example format:
-
-Hint:
-The subtraction step is correct, but the next equation is wrong.
-
-Correct next line:
-$n = \\frac{5}{5} = 1$
-                `.trim(),
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:image/png;base64,${buffer.toString("base64")}`,
-                },
-              },
-            ],
-          },
-        ],
+        temperature,
+        max_tokens: maxTokens,
+        messages,
       }),
     },
   );
@@ -147,6 +128,119 @@ $n = \\frac{5}{5} = 1$
 
   const payload = await response.json();
   return payload?.choices?.[0]?.message?.content?.trim() || "No hint available yet.";
+};
+
+const analyzeProblemContextWithAzure = async (buffer, mimeType = "image/png") =>
+  requestAzureChatCompletion({
+    maxTokens: 350,
+    temperature: 0.2,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `
+You are solving a math problem from the provided image before tutoring begins.
+
+Tasks:
+1. Read the problem carefully.
+2. Solve it fully.
+3. Produce reusable tutoring context for future hints.
+
+Return exactly these sections:
+Problem:
+<one sentence summary>
+
+Goal:
+<what the student must find or prove>
+
+Solved answer:
+<final answer>
+
+Key steps:
+1. <step>
+2. <step>
+3. <step>
+
+Pitfalls:
+1. <pitfall>
+2. <pitfall>
+
+Rules:
+- Be concise and precise.
+- If text is unclear, say what you infer.
+- ALL mathematical expressions MUST be written in LaTeX using $...$.
+            `.trim(),
+          },
+          createImageUrlPart(buffer, mimeType),
+        ],
+      },
+    ],
+  });
+
+const analyzeDrawingWithAzure = async ({
+  drawingBuffer,
+  drawingMimeType = "image/png",
+  problemBuffer = null,
+  problemMimeType = "image/png",
+  problemContext = "",
+}) => {
+  const content = [
+    {
+      type: "text",
+      text: `
+You are a strict math tutor checking a student's handwritten solution.
+
+Stored problem context:
+${problemContext || "No stored problem context is available."}
+
+Tasks:
+1. Identify the student's current work from the drawing image.
+2. Compare it against the stored problem context and expected solution path.
+3. Verify whether the latest visible step is valid.
+4. If incorrect, explain the mistake briefly.
+5. Provide the best next hint, not the full solution.
+
+Rules:
+- Prefer a minimal next-step hint.
+- Never assume the student is correct.
+- If the drawing is too incomplete, say what to do next.
+- Explanations must be short (max 2 sentences).
+- ALL mathematical expressions MUST be written in LaTeX using $...$.
+
+Format:
+Hint:
+<short hint>
+
+Correct next line:
+<next mathematical line or "Not enough work shown yet.">
+      `.trim(),
+    },
+  ];
+
+  if (problemBuffer) {
+    content.push({
+      type: "text",
+      text: "Reference problem image:",
+    });
+    content.push(createImageUrlPart(problemBuffer, problemMimeType));
+  }
+
+  content.push({
+    type: "text",
+    text: "Student whiteboard image:",
+  });
+  content.push(createImageUrlPart(drawingBuffer, drawingMimeType));
+
+  return requestAzureChatCompletion({
+    messages: [
+      {
+        role: "user",
+        content,
+      },
+    ],
+  });
 };
 
 const getOrigin = (request) => {
@@ -317,7 +411,37 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
   }
 
   try {
-    const result = await analyzeDrawingWithAzure(file.buffer);
+    const assignmentId = String(request.body?.assignmentId || "").trim();
+    const rawProblemIndex = Number(request.body?.problemIndex);
+    const problemIndex = Number.isInteger(rawProblemIndex) ? rawProblemIndex : null;
+
+    let problemBuffer = null;
+    let problemMimeType = "image/png";
+    let problemContext = "";
+
+    if (assignmentId && problemIndex != null) {
+      const [contextRecord, imageRecord] = await Promise.all([
+        getProblemContext(request.user.id, assignmentId, problemIndex),
+        getProblemImage(request.user.id, assignmentId, problemIndex),
+      ]);
+      problemContext = contextRecord?.content || "";
+
+      if (imageRecord?.blobName) {
+        const blob = await downloadProblemImageBufferFromBlob(imageRecord.blobName);
+        if (blob?.buffer) {
+          problemBuffer = blob.buffer;
+          problemMimeType = imageRecord.contentType || problemMimeType;
+        }
+      }
+    }
+
+    const result = await analyzeDrawingWithAzure({
+      drawingBuffer: file.buffer,
+      drawingMimeType: file.mimetype || "image/png",
+      problemBuffer,
+      problemMimeType,
+      problemContext,
+    });
     response.json({ result });
   } catch (error) {
     console.error("AI analyze failed:", error.message);
@@ -460,6 +584,7 @@ app.delete(
       removeScene(request.user.id, request.params.id, removedProblemIndex),
       removeProblemImage(request.user.id, request.params.id, removedProblemIndex),
     ]);
+    await removeProblemContext(request.user.id, request.params.id, removedProblemIndex);
     if (removedScene?.blobName) {
       await deleteBlobIfExists(removedScene.blobName);
     }
@@ -723,6 +848,21 @@ app.put(
       blob,
     );
 
+    try {
+      const generatedContext = await analyzeProblemContextWithAzure(
+        file.buffer,
+        file.mimetype || "image/png",
+      );
+      await upsertProblemContext(
+        request.user.id,
+        request.params.id,
+        problemIndex,
+        generatedContext,
+      );
+    } catch (error) {
+      console.error("Problem context generation failed:", error.message);
+    }
+
     if (existingRecord && existingRecord.blobName !== blob.blobName) {
       await deleteBlobIfExists(existingRecord.blobName);
     }
@@ -748,6 +888,7 @@ app.delete(
     const { problemIndex } = target;
 
     const record = await removeProblemImage(request.user.id, request.params.id, problemIndex);
+    await removeProblemContext(request.user.id, request.params.id, problemIndex);
     if (record) {
       await deleteBlobIfExists(record.blobName);
     }

@@ -139,6 +139,17 @@ export const initDb = async () => {
         updated_at BIGINT NOT NULL
       );
     `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS problem_contexts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+        problem_index INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
   })();
 
   return initPromise;
@@ -545,6 +556,69 @@ export const listProblemImageBlobNamesForUser = async (userId) => {
   return rows
     .map((row) => row.blob_name)
     .filter((blobName) => typeof blobName === "string" && blobName.length > 0);
+};
+
+const mapProblemContext = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  assignmentId: row.assignment_id,
+  problemIndex: Number(row.problem_index),
+  content: row.content,
+  updatedAt: Number(row.updated_at),
+});
+
+export const getProblemContext = async (userId, assignmentId, problemIndex) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const { rows } = await getPool().query(
+    `
+      SELECT id, user_id, assignment_id, problem_index, content, updated_at
+      FROM problem_contexts
+      WHERE id = $1
+      LIMIT 1;
+    `,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  return mapProblemContext(rows[0]);
+};
+
+export const upsertProblemContext = async (
+  userId,
+  assignmentId,
+  problemIndex,
+  content,
+) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const now = Date.now();
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO problem_contexts (
+        id, user_id, assignment_id, problem_index, content, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        content = EXCLUDED.content,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, user_id, assignment_id, problem_index, content, updated_at;
+    `,
+    [id, userId, assignmentId, problemIndex, content, now],
+  );
+  return mapProblemContext(rows[0]);
+};
+
+export const removeProblemContext = async (userId, assignmentId, problemIndex) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const { rows } = await getPool().query(
+    `
+      DELETE FROM problem_contexts
+      WHERE id = $1
+      RETURNING id, user_id, assignment_id, problem_index, content, updated_at;
+    `,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  return mapProblemContext(rows[0]);
 };
 
 export const deleteUserData = async (userId) => {

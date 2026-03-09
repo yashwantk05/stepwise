@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
-import Cropper from "react-easy-crop";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@excalidraw/excalidraw/index.css";
-import "react-easy-crop/react-easy-crop.css";
 import "./App.css";
 import { analyzeDrawing } from "./services/ai";
 import {
@@ -31,13 +29,6 @@ import {
 
 const PROBLEMS = [1, 2, 3];
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
-const ASPECT_PRESETS = [
-  { label: "4:3", value: 4 / 3 },
-  { label: "16:9", value: 16 / 9 },
-  { label: "3:2", value: 3 / 2 },
-  { label: "1:1", value: 1 },
-  { label: "9:16", value: 9 / 16 },
-];
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const getDefaultScene = () => ({
@@ -492,20 +483,17 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [selectedPage, setSelectedPage] = useState(1);
   const [pageImageUrl, setPageImageUrl] = useState("");
-  const [crop, setCrop] = useState({ x: 0, y: 0 });
-  const [zoom, setZoom] = useState(1);
-  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+  const [selectionRect, setSelectionRect] = useState(null);
+  const [isSelecting, setIsSelecting] = useState(false);
   const [isRenderingPage, setIsRenderingPage] = useState(false);
   const [isSavingProblemImage, setIsSavingProblemImage] = useState(false);
-  const [aspectRatio, setAspectRatio] = useState(4 / 3);
-  const [ratioWidth, setRatioWidth] = useState(4);
-  const [ratioHeight, setRatioHeight] = useState(3);
-  const latestSceneRef = useRef(getDefaultScene());
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
   const pdfDocumentRef = useRef(null);
   const problemImageUrlRef = useRef("");
   const pageImageUrlRef = useRef("");
+  const cropImageRef = useRef(null);
+  const dragStartRef = useRef(null);
 
   const clearProblemImageUrl = useCallback(() => {
     if (!problemImageUrlRef.current) return;
@@ -544,12 +532,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     setPickerStatus("");
     setPdfPageCount(0);
     setSelectedPage(1);
-    setCrop({ x: 0, y: 0 });
-    setZoom(1);
-    setAspectRatio(4 / 3);
-    setRatioWidth(4);
-    setRatioHeight(3);
-    setCroppedAreaPixels(null);
+    setSelectionRect(null);
+    setIsSelecting(false);
     clearPageImageUrl();
 
     const currentPdf = pdfDocumentRef.current;
@@ -586,10 +570,9 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         }
         pageImageUrlRef.current = objectUrl;
         setPageImageUrl(objectUrl);
-        setCrop({ x: 0, y: 0 });
-        setZoom(1);
-        setCroppedAreaPixels(null);
-        setPickerStatus(`Page ${pageNumber} ready. Adjust crop and save.`);
+        setSelectionRect(null);
+        setIsSelecting(false);
+        setPickerStatus(`Page ${pageNumber} ready. Drag on the image to select a crop area.`);
       } finally {
         setIsRenderingPage(false);
       }
@@ -728,14 +711,30 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   };
 
   const handleSaveProblemImage = async () => {
-    if (!pageImageUrl || !croppedAreaPixels) {
-      setPickerStatus("Select a page and crop area first.");
+    if (!pageImageUrl || !selectionRect || !cropImageRef.current) {
+      setPickerStatus("Drag to select a crop area first.");
       return;
     }
 
     setIsSavingProblemImage(true);
     try {
-      const croppedBlob = await createCroppedImageBlob(pageImageUrl, croppedAreaPixels);
+      const imageElement = cropImageRef.current;
+      const renderedWidth = imageElement.clientWidth;
+      const renderedHeight = imageElement.clientHeight;
+      if (!renderedWidth || !renderedHeight) {
+        throw new Error("Unable to read selected image dimensions.");
+      }
+
+      const scaleX = imageElement.naturalWidth / renderedWidth;
+      const scaleY = imageElement.naturalHeight / renderedHeight;
+      const cropAreaPixels = {
+        x: selectionRect.x * scaleX,
+        y: selectionRect.y * scaleY,
+        width: selectionRect.width * scaleX,
+        height: selectionRect.height * scaleY,
+      };
+
+      const croppedBlob = await createCroppedImageBlob(pageImageUrl, cropAreaPixels);
       const imageFile = new File([croppedBlob], `problem-${problemIndex}.png`, {
         type: "image/png",
       });
@@ -750,15 +749,48 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     }
   };
 
-  const applyCustomRatio = () => {
-    const width = Number(ratioWidth);
-    const height = Number(ratioHeight);
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      setPickerStatus("Enter valid ratio values.");
-      return;
-    }
-    setAspectRatio(width / height);
-    setPickerStatus(`Using ratio ${width}:${height}.`);
+  const handleSelectionStart = (event) => {
+    if (!cropImageRef.current || !pageImageUrl) return;
+    const imageRect = cropImageRef.current.getBoundingClientRect();
+    const startX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
+    const startY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
+
+    dragStartRef.current = { x: startX, y: startY };
+    setSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
+    setIsSelecting(true);
+    setPickerStatus("Selecting crop area...");
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleSelectionMove = (event) => {
+    if (!isSelecting || !dragStartRef.current || !cropImageRef.current) return;
+    const imageRect = cropImageRef.current.getBoundingClientRect();
+    const nextX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
+    const nextY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
+    const originX = dragStartRef.current.x;
+    const originY = dragStartRef.current.y;
+
+    setSelectionRect({
+      x: Math.min(originX, nextX),
+      y: Math.min(originY, nextY),
+      width: Math.abs(nextX - originX),
+      height: Math.abs(nextY - originY),
+    });
+  };
+
+  const handleSelectionEnd = (event) => {
+    if (!isSelecting) return;
+    setIsSelecting(false);
+    dragStartRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setSelectionRect((currentRect) => {
+      if (!currentRect || currentRect.width < 6 || currentRect.height < 6) {
+        setPickerStatus("Selection too small. Drag a larger area.");
+        return null;
+      }
+      setPickerStatus("Selection ready. Save cropped image.");
+      return currentRect;
+    });
   };
 
   const handleRemoveProblemImage = async () => {
@@ -937,75 +969,40 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               >
                 Next Page
               </button>
-              <label className="picker-label">
-                Ratio
-                <select
-                  value={String(aspectRatio)}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    setAspectRatio(next);
-                    setPickerStatus("Aspect ratio updated.");
-                  }}
-                >
-                  {ASPECT_PRESETS.map((preset) => (
-                    <option key={preset.label} value={String(preset.value)}>
-                      {preset.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="picker-label">
-                W
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={ratioWidth}
-                  onChange={(event) => setRatioWidth(Number(event.target.value))}
-                />
-              </label>
-              <label className="picker-label">
-                H
-                <input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={ratioHeight}
-                  onChange={(event) => setRatioHeight(Number(event.target.value))}
-                />
-              </label>
-              <button type="button" className="outline" onClick={applyCustomRatio}>
-                Apply Ratio
-              </button>
             </div>
 
             <div className="picker-crop-shell">
               {pageImageUrl ? (
-                <Cropper
-                  image={pageImageUrl}
-                  crop={crop}
-                  zoom={zoom}
-                  aspect={aspectRatio}
-                  onCropChange={setCrop}
-                  onZoomChange={setZoom}
-                  onCropComplete={(_, pixels) => setCroppedAreaPixels(pixels)}
-                />
+                <div className="picker-image-stage">
+                  <img
+                    ref={cropImageRef}
+                    className="picker-crop-image"
+                    src={pageImageUrl}
+                    alt={`PDF page ${selectedPage}`}
+                    draggable={false}
+                    onPointerDown={handleSelectionStart}
+                    onPointerMove={handleSelectionMove}
+                    onPointerUp={handleSelectionEnd}
+                    onPointerCancel={handleSelectionEnd}
+                    onPointerLeave={handleSelectionEnd}
+                  />
+                  {selectionRect && (
+                    <div
+                      className="picker-selection"
+                      style={{
+                        left: `${selectionRect.x}px`,
+                        top: `${selectionRect.y}px`,
+                        width: `${selectionRect.width}px`,
+                        height: `${selectionRect.height}px`,
+                      }}
+                    />
+                  )}
+                </div>
               ) : (
                 <p className="subtle">Rendering selected page...</p>
               )}
             </div>
-
-            <label className="picker-label">
-              Zoom
-              <input
-                type="range"
-                min={1}
-                max={3}
-                step={0.1}
-                value={zoom}
-                onChange={(event) => setZoom(Number(event.target.value))}
-              />
-            </label>
+            <p className="subtle">Drag on the page image to choose the exact crop area.</p>
             <p className="subtle">{pickerStatus}</p>
             <div className="control-row">
               <button

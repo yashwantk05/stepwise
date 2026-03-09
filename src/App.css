@@ -199,41 +199,34 @@ button.outline {
 }
 
 .whiteboard-stage {
-  position: relative;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 320px);
+  align-items: start;
 }
 
 .insights-rail {
-  position: absolute;
-  top: 18px;
-  right: 0;
-  display: flex;
-  align-items: flex-start;
+  display: grid;
   gap: 8px;
-  pointer-events: none;
 }
 
 .insights-tab {
-  pointer-events: auto;
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  border-radius: 12px 0 0 12px;
-  padding: 14px 10px;
-  min-height: 120px;
-  letter-spacing: 0.08em;
+  border-radius: 10px;
+  padding: 10px 12px;
+  width: 100%;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   background: linear-gradient(180deg, #16a34a, #15803d);
   border-color: #14532d;
 }
 
 .insights-panel {
-  pointer-events: auto;
-  width: min(320px, 84vw);
-  max-height: calc(70vh - 16px);
+  width: 100%;
+  max-height: 70vh;
   overflow-y: auto;
   border: 1px solid var(--line);
-  border-right: none;
-  border-radius: 14px 0 0 14px;
+  border-radius: 12px;
   padding: 14px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: var(--shadow);
@@ -328,10 +321,36 @@ button.outline {
   position: relative;
   width: 100%;
   height: min(60vh, 500px);
+  display: grid;
+  place-items: center;
   border-radius: 10px;
   border: 1px solid var(--line);
   background: #0f172a;
   overflow: hidden;
+}
+
+.picker-image-stage {
+  position: relative;
+  width: fit-content;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.picker-crop-image {
+  display: block;
+  max-width: 100%;
+  max-height: min(60vh, 500px);
+  user-select: none;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.picker-selection {
+  position: absolute;
+  border: 2px solid #22c55e;
+  background: rgba(34, 197, 94, 0.16);
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.42);
+  pointer-events: none;
 }
 
 .picker-label {
@@ -353,23 +372,15 @@ button.outline {
   min-width: 110px;
 }
 @media (max-width: 860px) {
-  .insights-rail {
-    position: static;
-    margin-top: 8px;
-    pointer-events: auto;
+  .whiteboard-stage {
+    grid-template-columns: 1fr;
   }
 
-  .insights-tab {
-    writing-mode: horizontal-tb;
-    transform: none;
-    min-height: auto;
-    border-radius: 10px;
-    padding: 10px 12px;
+  .insights-rail {
+    margin-top: 0;
   }
 
   .insights-panel {
-    border-right: 1px solid var(--line);
-    border-radius: 12px;
     max-height: 42vh;
   }
 

@@ -125,6 +125,7 @@
 }
 
 input,
+select,
 button {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -132,7 +133,8 @@ button {
   padding: 10px 12px;
 }
 
-input {
+input,
+select {
   min-width: 220px;
   background: var(--surface-strong);
 }
@@ -195,7 +197,6 @@ button.outline {
   background: #ffffff;
   box-shadow: var(--shadow);
 }
-
 
 .whiteboard-stage {
   position: relative;
@@ -294,6 +295,63 @@ button.outline {
 .insight-item-wrong summary {
   color: #991b1b;
 }
+
+.problem-image-preview {
+  width: min(100%, 900px);
+  max-height: 320px;
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  object-fit: contain;
+  background: #fff;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.56);
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  z-index: 1000;
+}
+
+.picker-panel {
+  width: min(1000px, 96vw);
+  max-height: 92vh;
+  overflow: auto;
+  display: grid;
+  gap: 10px;
+}
+
+.picker-crop-shell {
+  position: relative;
+  width: 100%;
+  height: min(60vh, 500px);
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.picker-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.picker-label input[type="number"] {
+  min-width: 84px;
+  width: 84px;
+}
+
+.picker-label input[type="range"] {
+  min-width: 160px;
+}
+
+.picker-label select {
+  min-width: 110px;
+}
 @media (max-width: 860px) {
   .insights-rail {
     position: static;
@@ -329,5 +387,3 @@ button.outline {
     flex: 1;
   }
 }
-
-

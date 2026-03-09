@@ -1,25 +1,44 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Excalidraw, MainMenu } from "@excalidraw/excalidraw";
+import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
+import Cropper from "react-easy-crop";
+import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@excalidraw/excalidraw/index.css";
+import "react-easy-crop/react-easy-crop.css";
 import "./App.css";
+import { analyzeDrawing } from "./services/ai";
 import {
-  clearActiveUser,
   createAssignment,
   deleteAssignment,
+  deleteProblemImage,
   deleteAssignmentPdf,
-  getActiveUser,
+  downloadAssignmentPdfBlob,
+  downloadProblemImageBlob,
+  getAssignmentPdfDownloadUrl,
   getAssignmentById,
   getAssignmentPdf,
+  getCurrentUser,
+  getGoogleSignInUrl,
+  getProblemImage,
   getProblemScene,
   listAssignments,
+  requestAccountDeletion,
   saveAssignmentPdf,
+  saveProblemImage,
   saveProblemScene,
-  setActiveUser,
+  signOut,
 } from "./services/storage";
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
-
 const PROBLEMS = [1, 2, 3];
+const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const ASPECT_PRESETS = [
+  { label: "4:3", value: 4 / 3 },
+  { label: "16:9", value: 16 / 9 },
+  { label: "3:2", value: 3 / 2 },
+  { label: "1:1", value: 1 },
+  { label: "9:16", value: 9 / 16 },
+];
+GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const getDefaultScene = () => ({
   elements: [],
@@ -120,22 +139,52 @@ const parseInsightsForProblem = (assignment, problemIndex) => {
   return parsed.map((entry, index) => ({ id: `insight-${index}`, ...entry }));
 };
 
+const getPersistedScene = (scene) => {
+  const normalizedElements = Array.isArray(scene?.elements) ? scene.elements : [];
+  const normalizedFiles =
+    scene?.files && typeof scene.files === "object" && !Array.isArray(scene.files)
+      ? scene.files
+      : {};
+  const viewBackgroundColor =
+    typeof scene?.appState?.viewBackgroundColor === "string"
+      ? scene.appState.viewBackgroundColor
+      : "#f8fafc";
+
+  return {
+    elements: normalizedElements,
+    appState: { viewBackgroundColor },
+    files: normalizedFiles,
+  };
+};
+
 const formatDate = (time) => new Date(time).toLocaleString();
 
-const decodeJwtPayload = (token) => {
-  try {
-    const base64 = token.split(".")[1]?.replace(/-/g, "+").replace(/_/g, "/");
-    if (!base64) return null;
-    const json = decodeURIComponent(
-      atob(base64)
-        .split("")
-        .map((char) => `%${char.charCodeAt(0).toString(16).padStart(2, "0")}`)
-        .join(""),
-    );
-    return JSON.parse(json);
-  } catch {
-    return null;
-  }
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const createCroppedImageBlob = async (sourceUrl, cropArea) => {
+  const image = await new Promise((resolve, reject) => {
+    const nextImage = new Image();
+    nextImage.onload = () => resolve(nextImage);
+    nextImage.onerror = () => reject(new Error("Unable to load rendered PDF page."));
+    nextImage.src = sourceUrl;
+  });
+
+  const width = clamp(Math.round(cropArea.width), 1, image.naturalWidth);
+  const height = clamp(Math.round(cropArea.height), 1, image.naturalHeight);
+  const x = clamp(Math.round(cropArea.x), 0, image.naturalWidth - width);
+  const y = clamp(Math.round(cropArea.y), 0, image.naturalHeight - height);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to initialize image crop context.");
+  context.drawImage(image, x, y, width, height, 0, 0, width, height);
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Unable to export cropped problem image.");
+  return blob;
 };
 
 const parseRoute = (path) => {
@@ -162,70 +211,9 @@ const parseRoute = (path) => {
   return { name: "unknown" };
 };
 
-function LoginPage({ onSignIn }) {
-  const [name, setName] = useState("");
-  const [authError, setAuthError] = useState("");
-  const googleButtonRef = useRef(null);
-
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
-
-    const initGoogle = () => {
-      if (!window.google?.accounts?.id || !googleButtonRef.current) return;
-
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response) => {
-          const payload = decodeJwtPayload(response.credential);
-          if (!payload?.sub) {
-            setAuthError("Google sign-in failed. Please continue in test mode.");
-            return;
-          }
-
-          onSignIn({
-            id: payload.sub,
-            name: payload.name || payload.email || "Google User",
-            email: payload.email || "",
-          });
-        },
-      });
-
-      googleButtonRef.current.innerHTML = "";
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: "outline",
-        size: "large",
-        width: 260,
-      });
-    };
-
-    if (window.google?.accounts?.id) {
-      initGoogle();
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    script.onload = initGoogle;
-    script.onerror = () => setAuthError("Unable to load Google sign-in. Use test mode.");
-    document.body.appendChild(script);
-
-    return () => {
-      document.body.removeChild(script);
-    };
-  }, [onSignIn]);
-
-  const handleDevSignIn = (event) => {
-    event.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) return;
-
-    onSignIn({
-      id: `local-${trimmed.toLowerCase().replace(/\s+/g, "-")}`,
-      name: trimmed,
-      email: "",
-    });
+function LoginPage({ authMessage }) {
+  const handleGoogleSignIn = () => {
+    window.location.assign(getGoogleSignInUrl());
   };
 
   return (
@@ -235,42 +223,30 @@ function LoginPage({ onSignIn }) {
       <p className="subtle">Access assignments, uploads, and problem whiteboards.</p>
 
       <div className="auth-block">
-        <h2>Google Sign-In</h2>
-        {GOOGLE_CLIENT_ID ? (
-          <div ref={googleButtonRef} className="google-button-slot" />
-        ) : (
-          <p className="subtle">Set `VITE_GOOGLE_CLIENT_ID` to enable Google login.</p>
-        )}
+        <h2>Google Sign-In (Server OAuth)</h2>
+        <button type="button" onClick={handleGoogleSignIn}>
+          Continue with Google
+        </button>
+        <p className="subtle">
+          You will be redirected to Google and back to this app after sign-in.
+        </p>
       </div>
 
-      <div className="auth-divider">or</div>
-
-      <form className="auth-block" onSubmit={handleDevSignIn}>
-        <h2>Test Mode</h2>
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Enter your name"
-          aria-label="Name"
-        />
-        <button type="submit">Continue</button>
-      </form>
-
-      {authError && <p className="error-text">{authError}</p>}
+      {authMessage && <p className="error-text">{authMessage}</p>}
     </section>
   );
 }
 
-function AssignmentsPage({ user, navigate, onSignOut }) {
+function AssignmentsPage({ user, navigate, onSignOut, onDeleteAccount }) {
   const [assignments, setAssignments] = useState([]);
   const [title, setTitle] = useState("");
   const [status, setStatus] = useState("Loading assignments...");
 
   const loadAssignments = useCallback(async () => {
-    const data = await listAssignments(user.id);
+    const data = await listAssignments();
     setAssignments(data);
     setStatus(data.length === 0 ? "No assignments yet." : `${data.length} assignments found.`);
-  }, [user.id]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -284,7 +260,7 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
     const trimmed = title.trim();
     if (!trimmed) return;
 
-    await createAssignment(user.id, trimmed);
+    await createAssignment(trimmed);
     setTitle("");
     await loadAssignments();
   };
@@ -292,7 +268,7 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
   const handleDelete = async (assignmentId, assignmentTitle) => {
     const shouldDelete = window.confirm(`Delete assignment "${assignmentTitle}"?`);
     if (!shouldDelete) return;
-    await deleteAssignment(user.id, assignmentId);
+    await deleteAssignment(assignmentId);
     await loadAssignments();
   };
 
@@ -305,6 +281,9 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
         </div>
         <div className="topbar-actions">
           <p className="status-pill">{status}</p>
+          <button type="button" className="danger" onClick={onDeleteAccount}>
+            Delete Account
+          </button>
           <button type="button" className="outline" onClick={onSignOut}>
             Sign Out
           </button>
@@ -347,24 +326,23 @@ function AssignmentsPage({ user, navigate, onSignOut }) {
   );
 }
 
-function AssignmentDetailPage({ user, assignmentId, navigate }) {
+function AssignmentDetailPage({ assignmentId, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [fileRecord, setFileRecord] = useState(null);
   const [status, setStatus] = useState("Loading assignment...");
 
   const load = useCallback(async () => {
-    const target = await getAssignmentById(assignmentId);
-    if (!target || target.userId !== user.id) {
+    try {
+      const target = await getAssignmentById(assignmentId);
+      const file = await getAssignmentPdf(assignmentId);
+      setAssignment(target);
+      setFileRecord(file || null);
+      setStatus("Assignment loaded.");
+    } catch {
       setStatus("Assignment not found.");
       setAssignment(null);
-      return;
     }
-
-    const file = await getAssignmentPdf(user.id, assignmentId);
-    setAssignment(target);
-    setFileRecord(file || null);
-    setStatus("Assignment loaded.");
-  }, [assignmentId, user.id]);
+  }, [assignmentId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -380,21 +358,23 @@ function AssignmentDetailPage({ user, assignmentId, navigate }) {
       setStatus("Please upload a PDF file.");
       return;
     }
+    if (file.size > MAX_PDF_BYTES) {
+      setStatus("PDF exceeds the 20MB upload limit.");
+      return;
+    }
 
-    await saveAssignmentPdf(user.id, assignmentId, file);
+    await saveAssignmentPdf(assignmentId, file);
     setStatus(`Uploaded ${file.name}.`);
     await load();
   };
 
-  const handleOpenPdf = () => {
-    if (!fileRecord?.blob) return;
-    const url = URL.createObjectURL(fileRecord.blob);
+  const handleOpenPdf = async () => {
+    const url = await getAssignmentPdfDownloadUrl(assignmentId);
     window.open(url, "_blank", "noopener,noreferrer");
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
   };
 
   const handleRemovePdf = async () => {
-    await deleteAssignmentPdf(user.id, assignmentId);
+    await deleteAssignmentPdf(assignmentId);
     setStatus("Removed uploaded PDF.");
     await load();
   };
@@ -404,7 +384,7 @@ function AssignmentDetailPage({ user, assignmentId, navigate }) {
     const shouldDelete = window.confirm(`Delete assignment "${assignment.title}"?`);
     if (!shouldDelete) return;
 
-    await deleteAssignment(user.id, assignment.id);
+    await deleteAssignment(assignment.id);
     navigate("/assignments");
   };
 
@@ -485,10 +465,10 @@ function AssignmentDetailPage({ user, assignmentId, navigate }) {
   );
 }
 
-function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
+function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [status, setStatus] = useState("Loading whiteboard...");
-  const [excalidrawAPI, setExcalidrawAPI] = useState(null);
+  const [hint, setHint] = useState("Start drawing to receive hints.");
   const [initialScene, setInitialScene] = useState(getDefaultScene());
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const latestSceneRef = useRef(getDefaultScene());
@@ -504,43 +484,288 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
     () => insights.filter((entry) => entry.kind === "wrong"),
     [insights],
   );
+  const [sceneRevision, setSceneRevision] = useState(0);
+  const [problemImageMeta, setProblemImageMeta] = useState(null);
+  const [problemImageUrl, setProblemImageUrl] = useState("");
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerStatus, setPickerStatus] = useState("");
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  const [selectedPage, setSelectedPage] = useState(1);
+  const [pageImageUrl, setPageImageUrl] = useState("");
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState(null);
+  const [isRenderingPage, setIsRenderingPage] = useState(false);
+  const [isSavingProblemImage, setIsSavingProblemImage] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState(4 / 3);
+  const [ratioWidth, setRatioWidth] = useState(4);
+  const [ratioHeight, setRatioHeight] = useState(3);
+  const latestSceneRef = useRef(getDefaultScene());
+  const analyzeTimerRef = useRef(null);
+  const lastSnapshotRef = useRef(null);
+  const pdfDocumentRef = useRef(null);
+  const problemImageUrlRef = useRef("");
+  const pageImageUrlRef = useRef("");
+
+  const clearProblemImageUrl = useCallback(() => {
+    if (!problemImageUrlRef.current) return;
+    URL.revokeObjectURL(problemImageUrlRef.current);
+    problemImageUrlRef.current = "";
+    setProblemImageUrl("");
+  }, []);
+
+  const clearPageImageUrl = useCallback(() => {
+    if (!pageImageUrlRef.current) return;
+    URL.revokeObjectURL(pageImageUrlRef.current);
+    pageImageUrlRef.current = "";
+    setPageImageUrl("");
+  }, []);
+
+  const loadProblemImage = useCallback(async () => {
+    const metadata = await getProblemImage(assignmentId, problemIndex);
+    if (!metadata) {
+      setProblemImageMeta(null);
+      clearProblemImageUrl();
+      return;
+    }
+
+    const blob = await downloadProblemImageBlob(assignmentId, problemIndex);
+    const objectUrl = URL.createObjectURL(blob);
+    if (problemImageUrlRef.current) {
+      URL.revokeObjectURL(problemImageUrlRef.current);
+    }
+    problemImageUrlRef.current = objectUrl;
+    setProblemImageMeta(metadata);
+    setProblemImageUrl(objectUrl);
+  }, [assignmentId, clearProblemImageUrl, problemIndex]);
+
+  const closePicker = useCallback(() => {
+    setIsPickerOpen(false);
+    setPickerStatus("");
+    setPdfPageCount(0);
+    setSelectedPage(1);
+    setCrop({ x: 0, y: 0 });
+    setZoom(1);
+    setAspectRatio(4 / 3);
+    setRatioWidth(4);
+    setRatioHeight(3);
+    setCroppedAreaPixels(null);
+    clearPageImageUrl();
+
+    const currentPdf = pdfDocumentRef.current;
+    pdfDocumentRef.current = null;
+    if (currentPdf?.destroy) {
+      void currentPdf.destroy();
+    }
+  }, [clearPageImageUrl]);
+
+  const renderSelectedPage = useCallback(
+    async (pdfDocument, pageNumber) => {
+      setIsRenderingPage(true);
+      try {
+        const page = await pdfDocument.getPage(pageNumber);
+        const initialViewport = page.getViewport({ scale: 1.5 });
+        const boundedScale = initialViewport.width > 1400 ? 1.5 * (1400 / initialViewport.width) : 1.5;
+        const viewport = page.getViewport({ scale: boundedScale });
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) {
+          throw new Error("Unable to initialize PDF rendering context.");
+        }
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: context, viewport }).promise;
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) {
+          throw new Error("Unable to render selected page.");
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        if (pageImageUrlRef.current) {
+          URL.revokeObjectURL(pageImageUrlRef.current);
+        }
+        pageImageUrlRef.current = objectUrl;
+        setPageImageUrl(objectUrl);
+        setCrop({ x: 0, y: 0 });
+        setZoom(1);
+        setCroppedAreaPixels(null);
+        setPickerStatus(`Page ${pageNumber} ready. Adjust crop and save.`);
+      } finally {
+        setIsRenderingPage(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const loadData = async () => {
-      const target = await getAssignmentById(assignmentId);
-      if (!target || target.userId !== user.id) {
-        setStatus("Assignment not found.");
-        return;
-      }
-
-      const storedScene = await getProblemScene(user.id, assignmentId, problemIndex);
-      const scene = storedScene?.scene || getDefaultScene();
+      const [target, storedScene] = await Promise.all([
+        getAssignmentById(assignmentId),
+        getProblemScene(assignmentId, problemIndex),
+      ]);
+      const scene = getPersistedScene(storedScene?.scene || getDefaultScene());
 
       setAssignment(target);
       setInitialScene(scene);
+      setSceneRevision((revision) => revision + 1);
       latestSceneRef.current = scene;
+      setHint("Start drawing to receive hints.");
+      lastSnapshotRef.current = null;
       setStatus(
         storedScene
           ? `Last saved ${formatDate(storedScene.updatedAt)}.`
           : "No saved drawing yet.",
       );
+      await loadProblemImage();
     };
 
-    loadData();
-  }, [assignmentId, problemIndex, user.id]);
+    loadData().catch(() => setStatus("Unable to load whiteboard."));
+  }, [assignmentId, problemIndex, loadProblemImage]);
 
-  useEffect(() => {
-    if (!excalidrawAPI) return;
-    excalidrawAPI.updateScene(initialScene);
-  }, [excalidrawAPI, initialScene]);
+  const blobToBase64 = useCallback(
+    (blob) =>
+      new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+      }),
+    [],
+  );
+
+  const analyzeSceneForHint = useCallback(
+    async (elements, appState, files) => {
+      if (elements.length === 0) {
+        setHint("Start drawing to receive hints.");
+        return;
+      }
+
+      const canvas = await exportToCanvas({
+        elements,
+        appState,
+        files,
+      });
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) return;
+
+      const base64 = await blobToBase64(blob);
+      if (base64 === lastSnapshotRef.current) return;
+      lastSnapshotRef.current = base64;
+
+      setHint("Generating hint...");
+      try {
+        const result = await analyzeDrawing(blob);
+        const nextHint = typeof result?.result === "string" ? result.result.trim() : "";
+        setHint(nextHint || "No hint available yet.");
+      } catch {
+        setHint("Hint service unavailable.");
+      }
+    },
+    [blobToBase64],
+  );
 
   const handleChange = useCallback((elements, appState, files) => {
-    latestSceneRef.current = { elements, appState, files };
-  }, []);
+    latestSceneRef.current = getPersistedScene({ elements, appState, files });
+    if (analyzeTimerRef.current) {
+      window.clearTimeout(analyzeTimerRef.current);
+    }
+    analyzeTimerRef.current = window.setTimeout(() => {
+      void analyzeSceneForHint(elements, appState, files);
+    }, 3000);
+  }, [analyzeSceneForHint]);
+
+  useEffect(
+    () => () => {
+      if (analyzeTimerRef.current) {
+        window.clearTimeout(analyzeTimerRef.current);
+      }
+
+      if (problemImageUrlRef.current) {
+        URL.revokeObjectURL(problemImageUrlRef.current);
+        problemImageUrlRef.current = "";
+      }
+      if (pageImageUrlRef.current) {
+        URL.revokeObjectURL(pageImageUrlRef.current);
+        pageImageUrlRef.current = "";
+      }
+      const currentPdf = pdfDocumentRef.current;
+      pdfDocumentRef.current = null;
+      if (currentPdf?.destroy) {
+        void currentPdf.destroy();
+      }
+    },
+    [],
+  );
 
   const handleSave = async () => {
-    await saveProblemScene(user.id, assignmentId, problemIndex, latestSceneRef.current);
+    await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
     setStatus(`Saved at ${new Date().toLocaleTimeString()}.`);
+  };
+
+  const handleOpenPicker = async () => {
+    setIsPickerOpen(true);
+    setPickerStatus("Loading PDF...");
+    try {
+      const pdfBlob = await downloadAssignmentPdfBlob(assignmentId);
+      const bytes = await pdfBlob.arrayBuffer();
+      const loadingTask = getDocument({ data: new Uint8Array(bytes) });
+      const pdfDocument = await loadingTask.promise;
+      pdfDocumentRef.current = pdfDocument;
+      setPdfPageCount(pdfDocument.numPages);
+      setSelectedPage(1);
+      await renderSelectedPage(pdfDocument, 1);
+    } catch {
+      setPickerStatus("Unable to open PDF. Upload a PDF first.");
+    }
+  };
+
+  const handlePageChange = async (value) => {
+    const nextPage = clamp(Number(value) || 1, 1, pdfPageCount || 1);
+    setSelectedPage(nextPage);
+    if (pdfDocumentRef.current) {
+      await renderSelectedPage(pdfDocumentRef.current, nextPage);
+    }
+  };
+
+  const handleSaveProblemImage = async () => {
+    if (!pageImageUrl || !croppedAreaPixels) {
+      setPickerStatus("Select a page and crop area first.");
+      return;
+    }
+
+    setIsSavingProblemImage(true);
+    try {
+      const croppedBlob = await createCroppedImageBlob(pageImageUrl, croppedAreaPixels);
+      const imageFile = new File([croppedBlob], `problem-${problemIndex}.png`, {
+        type: "image/png",
+      });
+      await saveProblemImage(assignmentId, problemIndex, imageFile);
+      await loadProblemImage();
+      closePicker();
+      setStatus(`Saved problem image at ${new Date().toLocaleTimeString()}.`);
+    } catch {
+      setPickerStatus("Unable to save cropped image.");
+    } finally {
+      setIsSavingProblemImage(false);
+    }
+  };
+
+  const applyCustomRatio = () => {
+    const width = Number(ratioWidth);
+    const height = Number(ratioHeight);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      setPickerStatus("Enter valid ratio values.");
+      return;
+    }
+    setAspectRatio(width / height);
+    setPickerStatus(`Using ratio ${width}:${height}.`);
+  };
+
+  const handleRemoveProblemImage = async () => {
+    await deleteProblemImage(assignmentId, problemIndex);
+    setProblemImageMeta(null);
+    clearProblemImageUrl();
+    setStatus("Removed problem image.");
   };
 
   if (!assignment) {
@@ -572,10 +797,41 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
         </div>
       </header>
 
+      <section className="panel">
+        <h2>Problem Image</h2>
+        <div className="control-row">
+          <button type="button" onClick={() => void handleOpenPicker()}>
+            {problemImageMeta ? "Replace from PDF" : "Select from PDF"}
+          </button>
+          {problemImageMeta && (
+            <button type="button" className="danger" onClick={() => void handleRemoveProblemImage()}>
+              Remove Image
+            </button>
+          )}
+        </div>
+        {problemImageMeta ? (
+          <>
+            <p className="subtle">
+              Updated {formatDate(problemImageMeta.updatedAt)}
+            </p>
+            {problemImageUrl && (
+              <img
+                className="problem-image-preview"
+                src={problemImageUrl}
+                alt={`Problem ${problemIndex}`}
+              />
+            )}
+          </>
+        ) : (
+          <p className="subtle">No problem image selected yet.</p>
+        )}
+      </section>
+
       <section className="whiteboard-stage">
         <section className="canvas-area">
           <Excalidraw
-            excalidrawAPI={setExcalidrawAPI}
+            key={`${assignmentId}-${problemIndex}-${sceneRevision}`}
+            initialData={initialScene}
             onChange={handleChange}
             UIOptions={{
               canvasActions: {
@@ -642,12 +898,138 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
           </section>
         </aside>
       </section>
+
+      <section className="panel">
+        <h2>AI Study Buddy</h2>
+        <p className="subtle">{hint}</p>
+      </section>
+
+      {isPickerOpen && (
+        <div className="modal-overlay" role="dialog" aria-modal="true">
+          <section className="panel picker-panel">
+            <h2>Select Problem Area</h2>
+            <div className="control-row">
+              <button
+                type="button"
+                className="outline"
+                onClick={() => void handlePageChange(selectedPage - 1)}
+                disabled={selectedPage <= 1 || isRenderingPage}
+              >
+                Previous Page
+              </button>
+              <label className="picker-label">
+                Page
+                <input
+                  type="number"
+                  min={1}
+                  max={pdfPageCount || 1}
+                  value={selectedPage}
+                  onChange={(event) => void handlePageChange(event.target.value)}
+                  disabled={!pdfPageCount || isRenderingPage}
+                />
+              </label>
+              <span className="subtle">of {pdfPageCount || "-"}</span>
+              <button
+                type="button"
+                className="outline"
+                onClick={() => void handlePageChange(selectedPage + 1)}
+                disabled={!pdfPageCount || selectedPage >= pdfPageCount || isRenderingPage}
+              >
+                Next Page
+              </button>
+              <label className="picker-label">
+                Ratio
+                <select
+                  value={String(aspectRatio)}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    setAspectRatio(next);
+                    setPickerStatus("Aspect ratio updated.");
+                  }}
+                >
+                  {ASPECT_PRESETS.map((preset) => (
+                    <option key={preset.label} value={String(preset.value)}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="picker-label">
+                W
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={ratioWidth}
+                  onChange={(event) => setRatioWidth(Number(event.target.value))}
+                />
+              </label>
+              <label className="picker-label">
+                H
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={ratioHeight}
+                  onChange={(event) => setRatioHeight(Number(event.target.value))}
+                />
+              </label>
+              <button type="button" className="outline" onClick={applyCustomRatio}>
+                Apply Ratio
+              </button>
+            </div>
+
+            <div className="picker-crop-shell">
+              {pageImageUrl ? (
+                <Cropper
+                  image={pageImageUrl}
+                  crop={crop}
+                  zoom={zoom}
+                  aspect={aspectRatio}
+                  onCropChange={setCrop}
+                  onZoomChange={setZoom}
+                  onCropComplete={(_, pixels) => setCroppedAreaPixels(pixels)}
+                />
+              ) : (
+                <p className="subtle">Rendering selected page...</p>
+              )}
+            </div>
+
+            <label className="picker-label">
+              Zoom
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.1}
+                value={zoom}
+                onChange={(event) => setZoom(Number(event.target.value))}
+              />
+            </label>
+            <p className="subtle">{pickerStatus}</p>
+            <div className="control-row">
+              <button
+                type="button"
+                onClick={() => void handleSaveProblemImage()}
+                disabled={isSavingProblemImage || isRenderingPage || !pageImageUrl}
+              >
+                {isSavingProblemImage ? "Saving..." : "Save Cropped Image"}
+              </button>
+              <button type="button" className="outline" onClick={closePicker}>
+                Cancel
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
     </>
   );
 }
 
 function App() {
-  const [user, setUser] = useState(() => getActiveUser());
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
   const [path, setPath] = useState(() => window.location.pathname || "/login");
 
   const navigate = useCallback((nextPath, replace = false) => {
@@ -666,6 +1048,20 @@ function App() {
   }, []);
 
   useEffect(() => {
+    getCurrentUser()
+      .then((currentUser) => {
+        setUser(currentUser);
+      })
+      .catch(() => {
+        setAuthMessage("Unable to validate your session. Please sign in again.");
+      })
+      .finally(() => {
+        setAuthReady(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
     let timer = null;
     if (!user && path !== "/login") {
       timer = window.setTimeout(() => navigate("/login", true), 0);
@@ -677,40 +1073,60 @@ function App() {
     return () => {
       if (timer) window.clearTimeout(timer);
     };
-  }, [navigate, path, user]);
+  }, [authReady, navigate, path, user]);
 
   const route = useMemo(() => parseRoute(path), [path]);
 
-  const handleSignIn = useCallback(
-    (nextUser) => {
-      setUser(nextUser);
-      setActiveUser(nextUser);
-      navigate("/assignments", true);
-    },
-    [navigate],
-  );
-
-  const handleSignOut = useCallback(() => {
-    clearActiveUser();
+  const handleSignOut = useCallback(async () => {
+    const { logoutUrl } = await signOut();
+    if (logoutUrl) {
+      window.location.assign(logoutUrl);
+      return;
+    }
     setUser(null);
     navigate("/login", true);
   }, [navigate]);
 
+  const handleDeleteAccount = useCallback(async () => {
+    const shouldDelete = window.confirm(
+      "Delete your account? This will remove your assignments and uploaded files.",
+    );
+    if (!shouldDelete) return;
+    await requestAccountDeletion();
+    setUser(null);
+    setAuthMessage("Your account deletion request has been submitted.");
+    navigate("/login", true);
+  }, [navigate]);
+
+  if (!authReady) {
+    return (
+      <main className="app-shell">
+        <section className="panel">
+          <p>Checking session...</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
-      {route.name === "login" && <LoginPage onSignIn={handleSignIn} />}
+      {route.name === "login" && <LoginPage authMessage={authMessage} />}
 
       {user && route.name === "assignments" && (
-        <AssignmentsPage user={user} navigate={navigate} onSignOut={handleSignOut} />
+        <AssignmentsPage
+          user={user}
+          navigate={navigate}
+          onSignOut={handleSignOut}
+          onDeleteAccount={handleDeleteAccount}
+        />
       )}
 
       {user && route.name === "assignment-detail" && (
-        <AssignmentDetailPage user={user} assignmentId={route.assignmentId} navigate={navigate} />
+        <AssignmentDetailPage assignmentId={route.assignmentId} navigate={navigate} />
       )}
 
       {user && route.name === "problem-board" && (
         <ProblemBoardPage
-          user={user}
           assignmentId={route.assignmentId}
           problemIndex={route.problemIndex}
           navigate={navigate}
@@ -730,4 +1146,3 @@ function App() {
 }
 
 export default App;
-

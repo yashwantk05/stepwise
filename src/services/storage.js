@@ -1,208 +1,253 @@
-const DB_NAME = "stepwise_app_db";
-const DB_VERSION = 1;
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
+let cachedUser = null;
 
-const STORES = {
-  assignments: "assignments",
-  assignmentFiles: "assignment_files",
-  problemScenes: "problem_scenes",
+const toUrl = (path) => `${API_BASE}${path}`;
+const normalizeFlag = (value) => String(value || "").trim().toLowerCase();
+const isLocalHost = () =>
+  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+
+const canUseDevBypass = () => {
+  const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
+  if (bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes") return true;
+  if (bypassFlag === "false" || bypassFlag === "0" || bypassFlag === "no") return false;
+  return import.meta.env.DEV && isLocalHost();
 };
 
-const ACTIVE_USER_KEY = "stepwise.active_user";
+const buildDevUser = () => ({
+  id: String(import.meta.env.VITE_DEV_USER_ID || "local-dev-user"),
+  name: String(import.meta.env.VITE_DEV_USER_NAME || "Local Developer"),
+  email: String(import.meta.env.VITE_DEV_USER_EMAIL || "local-dev@stepwise.local"),
+  provider: "local-dev",
+});
 
-let dbPromise = null;
-
-const openDb = () => {
-  if (dbPromise) return dbPromise;
-
-  dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORES.assignments)) {
-        db.createObjectStore(STORES.assignments, { keyPath: "id" });
-      }
-      if (!db.objectStoreNames.contains(STORES.assignmentFiles)) {
-        db.createObjectStore(STORES.assignmentFiles, { keyPath: "id" });
-      }
-      if (!db.objectStoreNames.contains(STORES.problemScenes)) {
-        db.createObjectStore(STORES.problemScenes, { keyPath: "id" });
-      }
-    };
-
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-
-  return dbPromise;
-};
-
-const requestToPromise = (request) =>
-  new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-
-const makeAssignmentId = () =>
-  `assignment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const makeFileId = (userId, assignmentId) => `${userId}:${assignmentId}`;
-const makeSceneId = (userId, assignmentId, problemIndex) =>
-  `${userId}:${assignmentId}:${problemIndex}`;
-
-export const getActiveUser = () => {
+const buildError = async (response) => {
+  let message = `Request failed (${response.status}).`;
   try {
-    const raw = localStorage.getItem(ACTIVE_USER_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw);
+    const data = await response.json();
+    if (data?.message) message = data.message;
   } catch {
-    return null;
+    // Ignore invalid JSON responses.
+  }
+  const error = new Error(message);
+  error.status = response.status;
+  return error;
+};
+
+const buildUserHeaders = () =>
+  cachedUser?.id
+    ? {
+        "x-stepwise-user-id": cachedUser.id,
+        "x-stepwise-user-name": cachedUser.name || "",
+        "x-stepwise-user-email": cachedUser.email || "",
+        "x-stepwise-user-provider": cachedUser.provider || "",
+      }
+    : {};
+
+const request = async (path, options = {}) => {
+  const response = await fetch(toUrl(path), {
+    credentials: "include",
+    headers: {
+      ...buildUserHeaders(),
+      ...(options.headers || {}),
+    },
+    ...options,
+  });
+
+  if (!response.ok) {
+    throw await buildError(response);
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
+};
+
+const mapEasyAuthUser = (payload) => {
+  const first = Array.isArray(payload) ? payload[0] : null;
+  const principal = first?.clientPrincipal || first;
+  if (!principal?.userId) return null;
+
+  const claims = Array.isArray(principal.claims) ? principal.claims : [];
+  const readClaim = (...types) =>
+    claims.find((claim) => types.includes(claim.typ))?.val || "";
+
+  return {
+    id: principal.userId,
+    name:
+      readClaim("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") ||
+      principal.userDetails ||
+      "User",
+    email:
+      readClaim(
+        "email",
+        "emails",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+      ) || "",
+    provider: principal.identityProvider || "",
+  };
+};
+
+export const getCurrentUser = async () => {
+  try {
+    const user = await request("/auth/me");
+    cachedUser = user;
+    return user;
+  } catch (error) {
+    if (error.status === 401) {
+      try {
+        const response = await fetch("/.auth/me", { credentials: "include" });
+        if (!response.ok) return null;
+        const payload = await response.json();
+        const user = mapEasyAuthUser(payload);
+        cachedUser = user;
+        return user;
+      } catch {
+        if (canUseDevBypass()) {
+          const devUser = buildDevUser();
+          cachedUser = devUser;
+          return devUser;
+        }
+        return null;
+      }
+    }
+    throw error;
   }
 };
 
-export const setActiveUser = (user) => {
-  localStorage.setItem(ACTIVE_USER_KEY, JSON.stringify(user));
+export const getGoogleSignInUrl = () => {
+  const returnTo = encodeURIComponent(window.location.origin);
+  return toUrl(`/auth/google/login?returnTo=${returnTo}`);
 };
 
-export const clearActiveUser = () => {
-  localStorage.removeItem(ACTIVE_USER_KEY);
+export const signOut = async () => {
+  if (cachedUser?.provider === "local-dev") {
+    cachedUser = null;
+    return { logoutUrl: null };
+  }
+  cachedUser = null;
+  return request("/auth/logout", { method: "POST" });
 };
 
-export const listAssignments = async (userId) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.assignments, "readonly");
-  const store = tx.objectStore(STORES.assignments);
-  const all = await requestToPromise(store.getAll());
-  return all
-    .filter((assignment) => assignment.userId === userId)
-    .sort((left, right) => right.updatedAt - left.updatedAt);
+export const requestAccountDeletion = async () => {
+  cachedUser = null;
+  await request("/account", { method: "DELETE" });
 };
 
-export const getAssignmentById = async (assignmentId) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.assignments, "readonly");
-  const store = tx.objectStore(STORES.assignments);
-  return requestToPromise(store.get(assignmentId));
-};
+export const listAssignments = async () => request("/assignments");
 
-export const createAssignment = async (userId, title) => {
-  const now = Date.now();
-  const assignment = {
-    id: makeAssignmentId(),
-    userId,
-    title: title.trim(),
-    createdAt: now,
-    updatedAt: now,
-  };
+export const getAssignmentById = async (assignmentId) =>
+  request(`/assignments/${encodeURIComponent(assignmentId)}`);
 
-  const db = await openDb();
-  const tx = db.transaction(STORES.assignments, "readwrite");
-  tx.objectStore(STORES.assignments).put(assignment);
-  await new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+export const createAssignment = async (title) =>
+  request("/assignments", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ title: title.trim() }),
   });
 
-  return assignment;
+export const deleteAssignment = async (assignmentId) =>
+  request(`/assignments/${encodeURIComponent(assignmentId)}`, {
+    method: "DELETE",
+  });
+
+export const saveAssignmentPdf = async (assignmentId, file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request(`/assignments/${encodeURIComponent(assignmentId)}/pdf`, {
+    method: "POST",
+    body: formData,
+  });
 };
 
-export const deleteAssignment = async (userId, assignmentId) => {
-  const db = await openDb();
-  const tx = db.transaction(
-    [STORES.assignments, STORES.assignmentFiles, STORES.problemScenes],
-    "readwrite",
+export const getAssignmentPdf = async (assignmentId) =>
+  request(`/assignments/${encodeURIComponent(assignmentId)}/pdf`);
+
+export const getAssignmentPdfDownloadUrl = async (assignmentId) => {
+  try {
+    const data = await request(
+      `/assignments/${encodeURIComponent(assignmentId)}/pdf/download-url`,
+    );
+    if (typeof data?.url === "string" && data.url.length > 0) {
+      return data.url;
+    }
+  } catch (error) {
+    if (error.status !== 404) throw error;
+  }
+  return toUrl(`/assignments/${encodeURIComponent(assignmentId)}/pdf/download`);
+};
+
+export const deleteAssignmentPdf = async (assignmentId) =>
+  request(`/assignments/${encodeURIComponent(assignmentId)}/pdf`, {
+    method: "DELETE",
+  });
+
+export const downloadAssignmentPdfBlob = async (assignmentId) => {
+  const response = await fetch(
+    toUrl(`/assignments/${encodeURIComponent(assignmentId)}/pdf/download`),
+    {
+      credentials: "include",
+      headers: buildUserHeaders(),
+    },
+  );
+  if (!response.ok) {
+    throw await buildError(response);
+  }
+  return response.blob();
+};
+
+export const getProblemScene = async (assignmentId, problemIndex) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/scene`,
   );
 
-  tx.objectStore(STORES.assignments).delete(assignmentId);
-  tx.objectStore(STORES.assignmentFiles).delete(makeFileId(userId, assignmentId));
+export const saveProblemScene = async (assignmentId, problemIndex, scene) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/scene`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ scene }),
+    },
+  );
 
-  const scenesStore = tx.objectStore(STORES.problemScenes);
-  const scenes = await requestToPromise(scenesStore.getAll());
-  scenes
-    .filter(
-      (scene) =>
-        scene.userId === userId &&
-        scene.assignmentId === assignmentId,
-    )
-    .forEach((scene) => scenesStore.delete(scene.id));
+export const getProblemImage = async (assignmentId, problemIndex) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,
+  );
 
-  await new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+export const saveProblemImage = async (assignmentId, problemIndex, file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,
+    {
+      method: "PUT",
+      body: formData,
+    },
+  );
 };
 
-export const saveAssignmentPdf = async (userId, assignmentId, file) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.assignmentFiles, "readwrite");
-  const store = tx.objectStore(STORES.assignmentFiles);
+export const deleteProblemImage = async (assignmentId, problemIndex) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,
+    {
+      method: "DELETE",
+    },
+  );
 
-  const record = {
-    id: makeFileId(userId, assignmentId),
-    userId,
-    assignmentId,
-    fileName: file.name,
-    mimeType: file.type || "application/pdf",
-    size: file.size,
-    uploadedAt: Date.now(),
-    blob: file,
-  };
-
-  store.put(record);
-
-  await new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-
-  return record;
-};
-
-export const getAssignmentPdf = async (userId, assignmentId) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.assignmentFiles, "readonly");
-  const store = tx.objectStore(STORES.assignmentFiles);
-  return requestToPromise(store.get(makeFileId(userId, assignmentId)));
-};
-
-export const deleteAssignmentPdf = async (userId, assignmentId) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.assignmentFiles, "readwrite");
-  tx.objectStore(STORES.assignmentFiles).delete(makeFileId(userId, assignmentId));
-  await new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-export const getProblemScene = async (userId, assignmentId, problemIndex) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.problemScenes, "readonly");
-  const store = tx.objectStore(STORES.problemScenes);
-  return requestToPromise(store.get(makeSceneId(userId, assignmentId, problemIndex)));
-};
-
-export const saveProblemScene = async (
-  userId,
-  assignmentId,
-  problemIndex,
-  scene,
-) => {
-  const db = await openDb();
-  const tx = db.transaction(STORES.problemScenes, "readwrite");
-  const store = tx.objectStore(STORES.problemScenes);
-
-  store.put({
-    id: makeSceneId(userId, assignmentId, problemIndex),
-    userId,
-    assignmentId,
-    problemIndex,
-    scene,
-    updatedAt: Date.now(),
-  });
-
-  await new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
+export const downloadProblemImageBlob = async (assignmentId, problemIndex) => {
+  const response = await fetch(
+    toUrl(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image/download`),
+    {
+      credentials: "include",
+      headers: buildUserHeaders(),
+    },
+  );
+  if (!response.ok) {
+    throw await buildError(response);
+  }
+  return response.blob();
 };

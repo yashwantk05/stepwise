@@ -196,7 +196,125 @@ button.outline {
   box-shadow: var(--shadow);
 }
 
+
+.whiteboard-stage {
+  position: relative;
+}
+
+.insights-rail {
+  position: absolute;
+  top: 18px;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.insights-tab {
+  pointer-events: auto;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  border-radius: 12px 0 0 12px;
+  padding: 14px 10px;
+  min-height: 120px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 0.76rem;
+  background: linear-gradient(180deg, #16a34a, #15803d);
+  border-color: #14532d;
+}
+
+.insights-panel {
+  pointer-events: auto;
+  width: min(320px, 84vw);
+  max-height: calc(70vh - 16px);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-right: none;
+  border-radius: 14px 0 0 14px;
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  display: none;
+}
+
+.insights-rail.is-open .insights-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.insights-panel h2,
+.insight-group h3 {
+  margin: 0;
+}
+
+.insight-group {
+  display: grid;
+  gap: 8px;
+}
+
+.insight-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.insight-item summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 10px 12px;
+  font-weight: 600;
+}
+
+.insight-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.insight-item p {
+  margin: 0;
+  padding: 0 12px 12px;
+  color: var(--ink);
+}
+
+.insight-item-hint {
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+
+.insight-item-hint summary {
+  color: #166534;
+}
+
+.insight-item-wrong {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+.insight-item-wrong summary {
+  color: #991b1b;
+}
 @media (max-width: 860px) {
+  .insights-rail {
+    position: static;
+    margin-top: 8px;
+    pointer-events: auto;
+  }
+
+  .insights-tab {
+    writing-mode: horizontal-tb;
+    transform: none;
+    min-height: auto;
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+
+  .insights-panel {
+    border-right: 1px solid var(--line);
+    border-radius: 12px;
+    max-height: 42vh;
+  }
+
   .app-shell {
     padding: 12px;
   }
@@ -211,3 +329,5 @@ button.outline {
     flex: 1;
   }
 }
+
+

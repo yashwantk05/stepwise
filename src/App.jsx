@@ -27,6 +27,99 @@ const getDefaultScene = () => ({
   files: {},
 });
 
+const WRONG_STEP_MATCHER =
+  /\b(wrong|incorrect|mistake|error|invalid|not correct|don't|do not|avoid)\b/i;
+
+const pickProblemBucket = (value, problemIndex) => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[problemIndex - 1] ?? null;
+  if (typeof value === "object") {
+    return value[problemIndex] ?? value[String(problemIndex)] ?? null;
+  }
+  return null;
+};
+
+const extractInsightEntries = (value, forcedKind = null) => {
+  if (!value) return [];
+
+  if (typeof value === "string") {
+    return [{ content: value, kind: forcedKind }];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractInsightEntries(entry, forcedKind));
+  }
+
+  if (typeof value === "object") {
+    const hints = value.hints || value.hint || [];
+    const wrong =
+      value.wrongSteps || value.wrongStep || value.wrong || value.errors || value.mistakes || [];
+
+    if (hints.length || wrong.length) {
+      return [
+        ...extractInsightEntries(hints, "hint"),
+        ...extractInsightEntries(wrong, "wrong"),
+      ];
+    }
+
+    const textValue =
+      value.content ||
+      value.text ||
+      value.message ||
+      value.value ||
+      value.description ||
+      "";
+
+    if (textValue) {
+      return [
+        {
+          content: String(textValue),
+          title: value.title || value.label || "",
+          kind: value.kind || value.type || value.category || forcedKind,
+        },
+      ];
+    }
+  }
+
+  return [];
+};
+
+const classifyInsightKind = (entry) => {
+  const declaredKind = String(entry.kind || "").toLowerCase();
+  if (declaredKind.includes("hint")) return "hint";
+  if (
+    declaredKind.includes("wrong") ||
+    declaredKind.includes("error") ||
+    declaredKind.includes("mistake")
+  ) {
+    return "wrong";
+  }
+  return WRONG_STEP_MATCHER.test(entry.content) ? "wrong" : "hint";
+};
+
+const parseInsightsForProblem = (assignment, problemIndex) => {
+  const candidates = [
+    pickProblemBucket(assignment?.insightsByProblem, problemIndex),
+    pickProblemBucket(assignment?.feedbackByProblem, problemIndex),
+    pickProblemBucket(assignment?.hintsByProblem, problemIndex),
+    pickProblemBucket(assignment?.wrongStepsByProblem, problemIndex),
+    pickProblemBucket(assignment?.aiFeedbackByProblem, problemIndex),
+    assignment?.insights,
+    assignment?.feedback,
+  ];
+
+  const parsed = candidates
+    .flatMap((candidate) => extractInsightEntries(candidate))
+    .map((entry) => ({
+      content: String(entry.content || "").trim(),
+      kind: classifyInsightKind(entry),
+      title: String(entry.title || "").trim(),
+    }))
+    .filter((entry) => entry.content.length > 0);
+
+  return parsed.map((entry, index) => ({ id: `insight-${index}`, ...entry }));
+};
+
 const formatDate = (time) => new Date(time).toLocaleString();
 
 const decodeJwtPayload = (token) => {
@@ -397,7 +490,20 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
   const [status, setStatus] = useState("Loading whiteboard...");
   const [excalidrawAPI, setExcalidrawAPI] = useState(null);
   const [initialScene, setInitialScene] = useState(getDefaultScene());
+  const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const latestSceneRef = useRef(getDefaultScene());
+  const insights = useMemo(
+    () => parseInsightsForProblem(assignment, problemIndex),
+    [assignment, problemIndex],
+  );
+  const hintInsights = useMemo(
+    () => insights.filter((entry) => entry.kind === "hint"),
+    [insights],
+  );
+  const wrongInsights = useMemo(
+    () => insights.filter((entry) => entry.kind === "wrong"),
+    [insights],
+  );
 
   useEffect(() => {
     const loadData = async () => {
@@ -466,29 +572,75 @@ function ProblemBoardPage({ user, assignmentId, problemIndex, navigate }) {
         </div>
       </header>
 
-      <section className="canvas-area">
-        <Excalidraw
-          excalidrawAPI={setExcalidrawAPI}
-          onChange={handleChange}
-          UIOptions={{
-            canvasActions: {
-              export: { saveFileToDisk: true },
-              saveToActiveFile: false,
-              loadScene: false,
-            },
-          }}
-        >
-          <MainMenu>
-            <MainMenu.DefaultItems.Export />
-            <MainMenu.DefaultItems.SaveAsImage />
-            <MainMenu.DefaultItems.SearchMenu />
-            <MainMenu.DefaultItems.Help />
-            <MainMenu.DefaultItems.ClearCanvas />
-            <MainMenu.Separator />
-            <MainMenu.DefaultItems.ToggleTheme />
-            <MainMenu.DefaultItems.ChangeCanvasBackground />
-          </MainMenu>
-        </Excalidraw>
+      <section className="whiteboard-stage">
+        <section className="canvas-area">
+          <Excalidraw
+            excalidrawAPI={setExcalidrawAPI}
+            onChange={handleChange}
+            UIOptions={{
+              canvasActions: {
+                export: { saveFileToDisk: true },
+                saveToActiveFile: false,
+                loadScene: false,
+              },
+            }}
+          >
+            <MainMenu>
+              <MainMenu.DefaultItems.Export />
+              <MainMenu.DefaultItems.SaveAsImage />
+              <MainMenu.DefaultItems.SearchMenu />
+              <MainMenu.DefaultItems.Help />
+              <MainMenu.DefaultItems.ClearCanvas />
+              <MainMenu.Separator />
+              <MainMenu.DefaultItems.ToggleTheme />
+              <MainMenu.DefaultItems.ChangeCanvasBackground />
+            </MainMenu>
+          </Excalidraw>
+        </section>
+
+        <aside className={`insights-rail ${isInsightsOpen ? "is-open" : ""}`}>
+          <button
+            type="button"
+            className="insights-tab"
+            onClick={() => setIsInsightsOpen((current) => !current)}
+            aria-expanded={isInsightsOpen}
+            aria-controls="whiteboard-insights-panel"
+          >
+            Hints
+          </button>
+
+          <section id="whiteboard-insights-panel" className="insights-panel" aria-label="Hints and wrong steps">
+            <h2>Hints and Wrong Steps</h2>
+
+            <div className="insight-group">
+              <h3>Hints</h3>
+              {hintInsights.length > 0 ? (
+                hintInsights.map((entry, index) => (
+                  <details key={entry.id} className="insight-item insight-item-hint">
+                    <summary>{entry.title || `Hint ${index + 1}`}</summary>
+                    <p>{entry.content}</p>
+                  </details>
+                ))
+              ) : (
+                <p className="subtle">No hints yet.</p>
+              )}
+            </div>
+
+            <div className="insight-group">
+              <h3>Wrong Steps</h3>
+              {wrongInsights.length > 0 ? (
+                wrongInsights.map((entry, index) => (
+                  <details key={entry.id} className="insight-item insight-item-wrong">
+                    <summary>{entry.title || `Wrong Step ${index + 1}`}</summary>
+                    <p>{entry.content}</p>
+                  </details>
+                ))
+              ) : (
+                <p className="subtle">No wrong steps yet.</p>
+              )}
+            </div>
+          </section>
+        </aside>
       </section>
     </>
   );
@@ -578,3 +730,4 @@ function App() {
 }
 
 export default App;
+

@@ -1,6 +1,8 @@
 import pg from "pg";
 
 const { Pool } = pg;
+const MIN_PROBLEM_COUNT = 1;
+const MAX_PROBLEM_COUNT = 60;
 
 const readDatabaseUrl = () => {
   const directUrl = globalThis.process?.env?.DATABASE_URL || "";
@@ -69,9 +71,14 @@ export const initDb = async () => {
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
         title TEXT NOT NULL,
+        problem_count INTEGER NOT NULL DEFAULT 1,
         created_at BIGINT NOT NULL,
         updated_at BIGINT NOT NULL
       );
+    `);
+    await activePool.query(`
+      ALTER TABLE assignments
+      ADD COLUMN IF NOT EXISTS problem_count INTEGER NOT NULL DEFAULT 1;
     `);
 
     await activePool.query(`
@@ -154,29 +161,38 @@ export const upsertUser = async (user) => {
   );
 };
 
+const normalizeProblemCount = (value) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return MIN_PROBLEM_COUNT;
+  return Math.min(MAX_PROBLEM_COUNT, Math.max(MIN_PROBLEM_COUNT, parsed));
+};
+
+const mapAssignment = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  title: row.title,
+  problemCount: normalizeProblemCount(row.problem_count),
+  createdAt: Number(row.created_at),
+  updatedAt: Number(row.updated_at),
+});
+
 export const listAssignmentsForUser = async (userId) => {
   const { rows } = await getPool().query(
     `
-      SELECT id, user_id, title, created_at, updated_at
+      SELECT id, user_id, title, problem_count, created_at, updated_at
       FROM assignments
       WHERE user_id = $1
       ORDER BY updated_at DESC;
     `,
     [userId],
   );
-  return rows.map((row) => ({
-    id: row.id,
-    userId: row.user_id,
-    title: row.title,
-    createdAt: Number(row.created_at),
-    updatedAt: Number(row.updated_at),
-  }));
+  return rows.map(mapAssignment);
 };
 
 export const findAssignmentById = async (userId, assignmentId) => {
   const { rows } = await getPool().query(
     `
-      SELECT id, user_id, title, created_at, updated_at
+      SELECT id, user_id, title, problem_count, created_at, updated_at
       FROM assignments
       WHERE user_id = $1 AND id = $2
       LIMIT 1;
@@ -184,27 +200,44 @@ export const findAssignmentById = async (userId, assignmentId) => {
     [userId, assignmentId],
   );
   if (rows.length === 0) return null;
-  const row = rows[0];
+  return mapAssignment(rows[0]);
+};
+
+export const insertAssignment = async (userId, title, problemCount = MIN_PROBLEM_COUNT) => {
+  const now = Date.now();
+  const id = `assignment-${now}-${Math.random().toString(36).slice(2, 8)}`;
+  const normalizedCount = normalizeProblemCount(problemCount);
+  await getPool().query(
+    `
+      INSERT INTO assignments (id, user_id, title, problem_count, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $5);
+    `,
+    [id, userId, title, normalizedCount, now],
+  );
   return {
-    id: row.id,
-    userId: row.user_id,
-    title: row.title,
-    createdAt: Number(row.created_at),
-    updatedAt: Number(row.updated_at),
+    id,
+    userId,
+    title,
+    problemCount: normalizedCount,
+    createdAt: now,
+    updatedAt: now,
   };
 };
 
-export const insertAssignment = async (userId, title) => {
+export const setAssignmentProblemCount = async (userId, assignmentId, problemCount) => {
+  const normalizedCount = normalizeProblemCount(problemCount);
   const now = Date.now();
-  const id = `assignment-${now}-${Math.random().toString(36).slice(2, 8)}`;
-  await getPool().query(
+  const { rows } = await getPool().query(
     `
-      INSERT INTO assignments (id, user_id, title, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $4);
+      UPDATE assignments
+      SET problem_count = $3, updated_at = $4
+      WHERE user_id = $1 AND id = $2
+      RETURNING id, user_id, title, problem_count, created_at, updated_at;
     `,
-    [id, userId, title, now],
+    [userId, assignmentId, normalizedCount, now],
   );
-  return { id, userId, title, createdAt: now, updatedAt: now };
+  if (rows.length === 0) return null;
+  return mapAssignment(rows[0]);
 };
 
 export const removeAssignment = async (userId, assignmentId) => {
@@ -389,6 +422,32 @@ export const listSceneBlobNamesForAssignment = async (userId, assignmentId) => {
   return rows
     .map((row) => row.blob_name)
     .filter((blobName) => typeof blobName === "string" && blobName.length > 0);
+};
+
+export const removeScene = async (userId, assignmentId, problemIndex) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const { rows } = await getPool().query(
+    `
+      DELETE FROM problem_scenes
+      WHERE id = $1
+      RETURNING id, user_id, assignment_id, problem_index, scene, blob_name, file_name, content_type, size, updated_at;
+    `,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  return {
+    id: row.id,
+    userId: row.user_id,
+    assignmentId: row.assignment_id,
+    problemIndex: Number(row.problem_index),
+    scene: row.scene,
+    blobName: row.blob_name || null,
+    fileName: row.file_name || null,
+    contentType: row.content_type || null,
+    size: row.size != null ? Number(row.size) : null,
+    updatedAt: Number(row.updated_at),
+  };
 };
 
 const mapProblemImage = (row) => ({

@@ -6,8 +6,10 @@ import "@excalidraw/excalidraw/index.css";
 import "./App.css";
 import { analyzeDrawing } from "./services/ai";
 import {
+  addProblemToAssignment,
   createAssignment,
   deleteAssignment,
+  deleteLastProblemFromAssignment,
   deleteProblemImage,
   deleteAssignmentPdf,
   downloadAssignmentPdfBlob,
@@ -27,7 +29,8 @@ import {
   signOut,
 } from "./services/storage";
 
-const PROBLEMS = [1, 2, 3];
+const MIN_PROBLEM_COUNT = 1;
+const MAX_PROBLEM_COUNT = 60;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -151,6 +154,13 @@ const getPersistedScene = (scene) => {
 const formatDate = (time) => new Date(time).toLocaleString();
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const normalizeProblemCount = (value) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return MIN_PROBLEM_COUNT;
+  return clamp(parsed, MIN_PROBLEM_COUNT, MAX_PROBLEM_COUNT);
+};
+const buildProblemIndexes = (problemCount) =>
+  Array.from({ length: normalizeProblemCount(problemCount) }, (_value, index) => index + 1);
 
 const createCroppedImageBlob = async (sourceUrl, cropArea) => {
   const image = await new Promise((resolve, reject) => {
@@ -182,7 +192,7 @@ const parseRoute = (path) => {
   if (path === "/login") return { name: "login" };
   if (path === "/assignments") return { name: "assignments" };
 
-  const problemMatch = path.match(/^\/assignments\/([^/]+)\/problems\/([1-3])$/);
+  const problemMatch = path.match(/^\/assignments\/([^/]+)\/problems\/([1-9]\d*)$/);
   if (problemMatch) {
     return {
       name: "problem-board",
@@ -231,6 +241,7 @@ function LoginPage({ authMessage }) {
 function AssignmentsPage({ user, navigate, onSignOut, onDeleteAccount }) {
   const [assignments, setAssignments] = useState([]);
   const [title, setTitle] = useState("");
+  const [problemCount, setProblemCount] = useState(String(MIN_PROBLEM_COUNT));
   const [status, setStatus] = useState("Loading assignments...");
 
   const loadAssignments = useCallback(async () => {
@@ -249,10 +260,23 @@ function AssignmentsPage({ user, navigate, onSignOut, onDeleteAccount }) {
   const handleCreate = async (event) => {
     event.preventDefault();
     const trimmed = title.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      setStatus("Assignment title is required.");
+      return;
+    }
+    const parsedCount = Number(problemCount);
+    if (
+      !Number.isInteger(parsedCount) ||
+      parsedCount < MIN_PROBLEM_COUNT ||
+      parsedCount > MAX_PROBLEM_COUNT
+    ) {
+      setStatus(`Problem count must be between ${MIN_PROBLEM_COUNT} and ${MAX_PROBLEM_COUNT}.`);
+      return;
+    }
 
-    await createAssignment(trimmed);
+    await createAssignment(trimmed, parsedCount);
     setTitle("");
+    setProblemCount(String(MIN_PROBLEM_COUNT));
     await loadAssignments();
   };
 
@@ -289,6 +313,15 @@ function AssignmentsPage({ user, navigate, onSignOut, onDeleteAccount }) {
             placeholder="New assignment title"
             aria-label="New assignment title"
           />
+          <input
+            type="number"
+            min={MIN_PROBLEM_COUNT}
+            max={MAX_PROBLEM_COUNT}
+            value={problemCount}
+            onChange={(event) => setProblemCount(event.target.value)}
+            placeholder="Problems (1-60)"
+            aria-label="Number of problems"
+          />
           <button type="submit">Create Assignment</button>
         </form>
       </section>
@@ -297,6 +330,7 @@ function AssignmentsPage({ user, navigate, onSignOut, onDeleteAccount }) {
         {assignments.map((assignment) => (
           <article key={assignment.id} className="assignment-card">
             <h2>{assignment.title}</h2>
+            <p>Problems: {normalizeProblemCount(assignment.problemCount)}</p>
             <p>Updated: {formatDate(assignment.updatedAt)}</p>
             <div className="card-actions">
               <button type="button" onClick={() => navigate(`/assignments/${assignment.id}`)}>
@@ -378,6 +412,30 @@ function AssignmentDetailPage({ assignmentId, navigate }) {
     await deleteAssignment(assignment.id);
     navigate("/assignments");
   };
+  const problemIndexes = buildProblemIndexes(assignment?.problemCount);
+
+  const handleAddProblem = async () => {
+    if (!assignment) return;
+    const nextAssignment = await addProblemToAssignment(assignment.id);
+    setAssignment(nextAssignment);
+    setStatus(`Added problem ${nextAssignment.problemCount}.`);
+  };
+
+  const handleDeleteLastProblem = async () => {
+    if (!assignment) return;
+    const shouldDelete = window.confirm(
+      `Delete Problem ${assignment.problemCount}? This removes its saved whiteboard and image.`,
+    );
+    if (!shouldDelete) return;
+
+    const result = await deleteLastProblemFromAssignment(assignment.id);
+    setAssignment(result.assignment);
+    setStatus(
+      result.removedArtifacts
+        ? `Deleted Problem ${result.removedProblemIndex} and removed its saved data.`
+        : `Deleted Problem ${result.removedProblemIndex}.`,
+    );
+  };
 
   if (!assignment) {
     return (
@@ -431,8 +489,29 @@ function AssignmentDetailPage({ assignmentId, navigate }) {
 
       <section className="panel">
         <h2>Problems</h2>
+        <div className="control-row">
+          <button
+            type="button"
+            onClick={() => void handleAddProblem()}
+            disabled={normalizeProblemCount(assignment.problemCount) >= MAX_PROBLEM_COUNT}
+          >
+            Add Problem
+          </button>
+          <button
+            type="button"
+            className="danger"
+            onClick={() => void handleDeleteLastProblem()}
+            disabled={normalizeProblemCount(assignment.problemCount) <= MIN_PROBLEM_COUNT}
+          >
+            Delete Last Problem
+          </button>
+          <p className="subtle">Total: {normalizeProblemCount(assignment.problemCount)}</p>
+        </div>
+        <p className="warning-text">
+          Warning: Deleting the last problem permanently removes its saved whiteboard and image.
+        </p>
         <div className="grid-list problem-grid">
-          {PROBLEMS.map((problemIndex) => (
+          {problemIndexes.map((problemIndex) => (
             <article key={problemIndex} className="assignment-card">
               <h3>Problem {problemIndex}</h3>
               <p>Opens a dedicated whiteboard session.</p>
@@ -582,13 +661,23 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
   useEffect(() => {
     const loadData = async () => {
-      const [target, storedScene] = await Promise.all([
-        getAssignmentById(assignmentId),
-        getProblemScene(assignmentId, problemIndex),
-      ]);
-      const scene = getPersistedScene(storedScene?.scene || getDefaultScene());
-
+      const target = await getAssignmentById(assignmentId);
       setAssignment(target);
+      const assignmentProblemCount = normalizeProblemCount(target.problemCount);
+      if (problemIndex > assignmentProblemCount) {
+        setInitialScene(getDefaultScene());
+        setSceneRevision((revision) => revision + 1);
+        latestSceneRef.current = getDefaultScene();
+        setHint("Start drawing to receive hints.");
+        lastSnapshotRef.current = null;
+        setStatus(`Problem ${problemIndex} does not exist in this assignment.`);
+        setProblemImageMeta(null);
+        clearProblemImageUrl();
+        return;
+      }
+
+      const storedScene = await getProblemScene(assignmentId, problemIndex);
+      const scene = getPersistedScene(storedScene?.scene || getDefaultScene());
       setInitialScene(scene);
       setSceneRevision((revision) => revision + 1);
       latestSceneRef.current = scene;
@@ -603,7 +692,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     };
 
     loadData().catch(() => setStatus("Unable to load whiteboard."));
-  }, [assignmentId, problemIndex, loadProblemImage]);
+  }, [assignmentId, clearProblemImageUrl, loadProblemImage, problemIndex]);
 
   const blobToBase64 = useCallback(
     (blob) =>
@@ -805,6 +894,17 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       <section className="panel">
         <p>{status}</p>
         <button type="button" onClick={() => navigate("/assignments")}>Go to Assignments</button>
+      </section>
+    );
+  }
+
+  if (problemIndex > normalizeProblemCount(assignment.problemCount)) {
+    return (
+      <section className="panel">
+        <p>{status}</p>
+        <button type="button" onClick={() => navigate(`/assignments/${assignmentId}`)}>
+          Back to Assignment
+        </button>
       </section>
     );
   }

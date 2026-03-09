@@ -28,8 +28,10 @@ import {
   listAssignmentsForUser,
   listSceneBlobNamesForAssignment,
   removeProblemImage,
+  removeScene,
   removeAssignmentPdf,
   removeAssignment,
+  setAssignmentProblemCount,
   upsertProblemImage,
   upsertAssignmentPdf,
   upsertScene,
@@ -58,6 +60,8 @@ const imageUpload = multer({
     fileSize: 8 * 1024 * 1024,
   },
 });
+const MIN_PROBLEM_COUNT = 1;
+const MAX_PROBLEM_COUNT = 60;
 
 const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
 const readEnv = (name) => String(globalThis.process?.env?.[name] || "").trim();
@@ -266,6 +270,39 @@ const requireDb = (_request, response, next) => {
   response.status(503).json({ message: `Database is not ready.${detail}`.trim() });
 };
 
+const parseProblemCount = (value) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return null;
+  if (parsed < MIN_PROBLEM_COUNT || parsed > MAX_PROBLEM_COUNT) return null;
+  return parsed;
+};
+
+const parseProblemIndex = (value) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < MIN_PROBLEM_COUNT) return null;
+  return parsed;
+};
+
+const getAssignmentAndProblemIndex = async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return null;
+  }
+
+  const problemIndex = parseProblemIndex(request.params.problemIndex);
+  if (!problemIndex) {
+    response.status(400).json({ message: "Problem index must be a positive integer." });
+    return null;
+  }
+  if (problemIndex > assignment.problemCount) {
+    response.status(404).json({ message: "Problem index is out of range for this assignment." });
+    return null;
+  }
+
+  return { assignment, problemIndex };
+};
+
 app.get("/api/health", (_request, response) => {
   response.json({ status: "ok", service: "stepwise-api" });
 });
@@ -330,13 +367,20 @@ app.get("/api/assignments", requireDb, requireAuth, async (request, response) =>
 
 app.post("/api/assignments", requireDb, requireAuth, async (request, response) => {
   const title = String(request.body?.title || "").trim();
+  const problemCount = parseProblemCount(request.body?.problemCount);
   if (!title) {
     response.status(400).json({ message: "Title is required." });
     return;
   }
+  if (!problemCount) {
+    response
+      .status(400)
+      .json({ message: `Problem count must be an integer between ${MIN_PROBLEM_COUNT} and ${MAX_PROBLEM_COUNT}.` });
+    return;
+  }
 
   await upsertUser(request.user);
-  const assignment = await insertAssignment(request.user.id, title);
+  const assignment = await insertAssignment(request.user.id, title, problemCount);
   response.status(201).json(assignment);
 });
 
@@ -372,6 +416,70 @@ app.delete("/api/assignments/:id", requireDb, requireAuth, async (request, respo
   await removeAssignment(request.user.id, request.params.id);
   response.status(204).send();
 });
+
+app.post("/api/assignments/:id/problems/add", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+  if (assignment.problemCount >= MAX_PROBLEM_COUNT) {
+    response
+      .status(400)
+      .json({ message: `Assignments support at most ${MAX_PROBLEM_COUNT} problems.` });
+    return;
+  }
+
+  const updated = await setAssignmentProblemCount(
+    request.user.id,
+    request.params.id,
+    assignment.problemCount + 1,
+  );
+  response.json(updated);
+});
+
+app.delete(
+  "/api/assignments/:id/problems/last",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+    if (assignment.problemCount <= MIN_PROBLEM_COUNT) {
+      response
+        .status(400)
+        .json({ message: `Assignments must have at least ${MIN_PROBLEM_COUNT} problem.` });
+      return;
+    }
+
+    const removedProblemIndex = assignment.problemCount;
+    const [removedScene, removedImage] = await Promise.all([
+      removeScene(request.user.id, request.params.id, removedProblemIndex),
+      removeProblemImage(request.user.id, request.params.id, removedProblemIndex),
+    ]);
+    if (removedScene?.blobName) {
+      await deleteBlobIfExists(removedScene.blobName);
+    }
+    if (removedImage?.blobName) {
+      await deleteBlobIfExists(removedImage.blobName);
+    }
+
+    const updated = await setAssignmentProblemCount(
+      request.user.id,
+      request.params.id,
+      assignment.problemCount - 1,
+    );
+
+    response.json({
+      assignment: updated,
+      removedProblemIndex,
+      removedArtifacts: Boolean(removedScene || removedImage),
+    });
+  },
+);
 
 app.get("/api/assignments/:id/pdf", requireDb, requireAuth, async (request, response) => {
   const assignment = await findAssignmentById(request.user.id, request.params.id);
@@ -523,17 +631,11 @@ app.get(
   requireDb,
   requireAuth,
   async (request, response) => {
-    const assignment = await findAssignmentById(request.user.id, request.params.id);
-    if (!assignment) {
-      response.status(404).json({ message: "Assignment not found." });
-      return;
-    }
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
 
-    const record = await getProblemImage(
-      request.user.id,
-      request.params.id,
-      Number(request.params.problemIndex),
-    );
+    const record = await getProblemImage(request.user.id, request.params.id, problemIndex);
     if (!record) {
       response.json(null);
       return;
@@ -559,17 +661,11 @@ app.get(
   requireDb,
   requireAuth,
   async (request, response) => {
-    const assignment = await findAssignmentById(request.user.id, request.params.id);
-    if (!assignment) {
-      response.status(404).json({ message: "Assignment not found." });
-      return;
-    }
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
 
-    const record = await getProblemImage(
-      request.user.id,
-      request.params.id,
-      Number(request.params.problemIndex),
-    );
+    const record = await getProblemImage(request.user.id, request.params.id, problemIndex);
     if (!record) {
       response.status(404).json({ message: "No problem image saved yet." });
       return;
@@ -594,11 +690,9 @@ app.put(
   requireAuth,
   imageUpload.single("file"),
   async (request, response) => {
-    const assignment = await findAssignmentById(request.user.id, request.params.id);
-    if (!assignment) {
-      response.status(404).json({ message: "Assignment not found." });
-      return;
-    }
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
 
     const file = request.file;
     if (!file) {
@@ -612,16 +706,12 @@ app.put(
       return;
     }
 
-    const existingRecord = await getProblemImage(
-      request.user.id,
-      request.params.id,
-      Number(request.params.problemIndex),
-    );
+    const existingRecord = await getProblemImage(request.user.id, request.params.id, problemIndex);
 
     const blob = await uploadProblemImageToBlob({
       userId: request.user.id,
       assignmentId: request.params.id,
-      problemIndex: Number(request.params.problemIndex),
+      problemIndex,
       buffer: file.buffer,
       contentType: file.mimetype,
     });
@@ -629,7 +719,7 @@ app.put(
     const record = await upsertProblemImage(
       request.user.id,
       request.params.id,
-      Number(request.params.problemIndex),
+      problemIndex,
       blob,
     );
 
@@ -653,17 +743,11 @@ app.delete(
   requireDb,
   requireAuth,
   async (request, response) => {
-    const assignment = await findAssignmentById(request.user.id, request.params.id);
-    if (!assignment) {
-      response.status(404).json({ message: "Assignment not found." });
-      return;
-    }
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
 
-    const record = await removeProblemImage(
-      request.user.id,
-      request.params.id,
-      Number(request.params.problemIndex),
-    );
+    const record = await removeProblemImage(request.user.id, request.params.id, problemIndex);
     if (record) {
       await deleteBlobIfExists(record.blobName);
     }
@@ -677,11 +761,11 @@ app.get(
   requireDb,
   requireAuth,
   async (request, response) => {
-    const record = await getScene(
-      request.user.id,
-      request.params.id,
-      Number(request.params.problemIndex),
-    );
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const record = await getScene(request.user.id, request.params.id, problemIndex);
 
     if (!record) {
       response.json(null);
@@ -712,18 +796,22 @@ app.put(
   requireDb,
   requireAuth,
   async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
     const scene = request.body?.scene || null;
     const blob = await uploadProblemSceneToBlob({
       userId: request.user.id,
       assignmentId: request.params.id,
-      problemIndex: Number(request.params.problemIndex),
+      problemIndex,
       scene,
     });
 
     const record = await upsertScene(
       request.user.id,
       request.params.id,
-      Number(request.params.problemIndex),
+      problemIndex,
       scene,
       blob,
     );

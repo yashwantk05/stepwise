@@ -137,13 +137,26 @@ export const listAssignments = async () => request("/assignments");
 export const getAssignmentById = async (assignmentId) =>
   request(`/assignments/${encodeURIComponent(assignmentId)}`);
 
-export const createAssignment = async (title) =>
+export const createAssignment = async (title, problemCount) =>
   request("/assignments", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ title: title.trim() }),
+    body: JSON.stringify({
+      title: title.trim(),
+      problemCount,
+    }),
+  });
+
+export const addProblemToAssignment = async (assignmentId) =>
+  request(`/assignments/${encodeURIComponent(assignmentId)}/problems/add`, {
+    method: "POST",
+  });
+
+export const deleteLastProblemFromAssignment = async (assignmentId) =>
+  request(`/assignments/${encodeURIComponent(assignmentId)}/problems/last`, {
+    method: "DELETE",
   });
 
 export const deleteAssignment = async (assignmentId) =>

@@ -118,6 +118,20 @@ export const initDb = async () => {
         updated_at BIGINT NOT NULL
       );
     `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS problem_images (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+        problem_index INTEGER NOT NULL,
+        blob_name TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        size BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
   })();
 
   return initPromise;
@@ -371,6 +385,103 @@ export const listSceneBlobNamesForAssignment = async (userId, assignmentId) => {
       WHERE user_id = $1 AND assignment_id = $2 AND blob_name IS NOT NULL;
     `,
     [userId, assignmentId],
+  );
+  return rows
+    .map((row) => row.blob_name)
+    .filter((blobName) => typeof blobName === "string" && blobName.length > 0);
+};
+
+const mapProblemImage = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  assignmentId: row.assignment_id,
+  problemIndex: Number(row.problem_index),
+  blobName: row.blob_name,
+  fileName: row.file_name,
+  contentType: row.content_type,
+  size: Number(row.size),
+  updatedAt: Number(row.updated_at),
+});
+
+export const getProblemImage = async (userId, assignmentId, problemIndex) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const { rows } = await getPool().query(
+    `
+      SELECT id, user_id, assignment_id, problem_index, blob_name, file_name, content_type, size, updated_at
+      FROM problem_images
+      WHERE id = $1
+      LIMIT 1;
+    `,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  return mapProblemImage(rows[0]);
+};
+
+export const upsertProblemImage = async (
+  userId,
+  assignmentId,
+  problemIndex,
+  { blobName, fileName, contentType, size },
+) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const now = Date.now();
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO problem_images (
+        id, user_id, assignment_id, problem_index, blob_name, file_name, content_type, size, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        blob_name = EXCLUDED.blob_name,
+        file_name = EXCLUDED.file_name,
+        content_type = EXCLUDED.content_type,
+        size = EXCLUDED.size,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, user_id, assignment_id, problem_index, blob_name, file_name, content_type, size, updated_at;
+    `,
+    [id, userId, assignmentId, problemIndex, blobName, fileName, contentType, size, now],
+  );
+  return mapProblemImage(rows[0]);
+};
+
+export const removeProblemImage = async (userId, assignmentId, problemIndex) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const { rows } = await getPool().query(
+    `
+      DELETE FROM problem_images
+      WHERE id = $1
+      RETURNING id, user_id, assignment_id, problem_index, blob_name, file_name, content_type, size, updated_at;
+    `,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  return mapProblemImage(rows[0]);
+};
+
+export const listProblemImageBlobNamesForAssignment = async (userId, assignmentId) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT blob_name
+      FROM problem_images
+      WHERE user_id = $1 AND assignment_id = $2;
+    `,
+    [userId, assignmentId],
+  );
+  return rows
+    .map((row) => row.blob_name)
+    .filter((blobName) => typeof blobName === "string" && blobName.length > 0);
+};
+
+export const listProblemImageBlobNamesForUser = async (userId) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT blob_name
+      FROM problem_images
+      WHERE user_id = $1;
+    `,
+    [userId],
   );
   return rows
     .map((row) => row.blob_name)

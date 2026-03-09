@@ -8,22 +8,29 @@ import {
   createReadSasUrl,
   deleteBlobIfExists,
   downloadAssignmentPdfFromBlob,
+  downloadProblemImageFromBlob,
   downloadProblemSceneFromBlob,
   uploadAssignmentPdfToBlob,
+  uploadProblemImageToBlob,
   uploadProblemSceneToBlob,
 } from "./blobStorage.js";
 import {
   deleteUserData,
   findAssignmentById,
   getAssignmentPdfByAssignmentId,
+  getProblemImage,
   getScene,
   initDb,
   insertAssignment,
   listAssignmentPdfsForUser,
+  listProblemImageBlobNamesForAssignment,
+  listProblemImageBlobNamesForUser,
   listAssignmentsForUser,
   listSceneBlobNamesForAssignment,
+  removeProblemImage,
   removeAssignmentPdf,
   removeAssignment,
+  upsertProblemImage,
   upsertAssignmentPdf,
   upsertScene,
   upsertUser,
@@ -42,6 +49,13 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 20 * 1024 * 1024,
+  },
+});
+
+const imageUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 8 * 1024 * 1024,
   },
 });
 
@@ -302,6 +316,8 @@ app.post("/api/auth/logout", (request, response) => {
 app.delete("/api/account", requireDb, requireAuth, async (request, response) => {
   const uploadedPdfs = await listAssignmentPdfsForUser(request.user.id);
   await Promise.all(uploadedPdfs.map((record) => deleteBlobIfExists(record.blobName)));
+  const problemImageBlobNames = await listProblemImageBlobNamesForUser(request.user.id);
+  await Promise.all(problemImageBlobNames.map((blobName) => deleteBlobIfExists(blobName)));
   await deleteUserData(request.user.id);
   response.status(202).json({ message: "Account deletion request accepted." });
 });
@@ -343,6 +359,14 @@ app.delete("/api/assignments/:id", requireDb, requireAuth, async (request, respo
   const sceneBlobNames = await listSceneBlobNamesForAssignment(request.user.id, request.params.id);
   if (sceneBlobNames.length > 0) {
     await Promise.all(sceneBlobNames.map((blobName) => deleteBlobIfExists(blobName)));
+  }
+
+  const problemImageBlobNames = await listProblemImageBlobNamesForAssignment(
+    request.user.id,
+    request.params.id,
+  );
+  if (problemImageBlobNames.length > 0) {
+    await Promise.all(problemImageBlobNames.map((blobName) => deleteBlobIfExists(blobName)));
   }
 
   await removeAssignment(request.user.id, request.params.id);
@@ -495,6 +519,160 @@ app.get("/api/assignments/:id/pdf/download", requireDb, requireAuth, async (requ
 });
 
 app.get(
+  "/api/assignments/:id/problems/:problemIndex/image",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+
+    const record = await getProblemImage(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+    );
+    if (!record) {
+      response.json(null);
+      return;
+    }
+
+    const directUrl = await createReadSasUrl(record.blobName);
+    response.json({
+      assignmentId: record.assignmentId,
+      problemIndex: record.problemIndex,
+      fileName: record.fileName,
+      contentType: record.contentType,
+      size: record.size,
+      updatedAt: record.updatedAt,
+      downloadUrl:
+        directUrl ||
+        `/api/assignments/${encodeURIComponent(record.assignmentId)}/problems/${record.problemIndex}/image/download`,
+    });
+  },
+);
+
+app.get(
+  "/api/assignments/:id/problems/:problemIndex/image/download",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+
+    const record = await getProblemImage(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+    );
+    if (!record) {
+      response.status(404).json({ message: "No problem image saved yet." });
+      return;
+    }
+
+    const blob = await downloadProblemImageFromBlob(record.blobName);
+    if (!blob?.stream) {
+      response.status(404).json({ message: "Problem image is missing from storage." });
+      return;
+    }
+
+    response.setHeader("Content-Type", record.contentType || "image/png");
+    response.setHeader("Content-Length", String(blob.contentLength || record.size));
+    response.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(record.fileName)}"`);
+    blob.stream.pipe(response);
+  },
+);
+
+app.put(
+  "/api/assignments/:id/problems/:problemIndex/image",
+  requireDb,
+  requireAuth,
+  imageUpload.single("file"),
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+
+    const file = request.file;
+    if (!file) {
+      response.status(400).json({ message: "Problem image file is required." });
+      return;
+    }
+
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    if (!allowedTypes.has(file.mimetype)) {
+      response.status(400).json({ message: "Only PNG, JPEG, and WEBP uploads are supported." });
+      return;
+    }
+
+    const existingRecord = await getProblemImage(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+    );
+
+    const blob = await uploadProblemImageToBlob({
+      userId: request.user.id,
+      assignmentId: request.params.id,
+      problemIndex: Number(request.params.problemIndex),
+      buffer: file.buffer,
+      contentType: file.mimetype,
+    });
+
+    const record = await upsertProblemImage(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+      blob,
+    );
+
+    if (existingRecord && existingRecord.blobName !== blob.blobName) {
+      await deleteBlobIfExists(existingRecord.blobName);
+    }
+
+    response.json({
+      assignmentId: record.assignmentId,
+      problemIndex: record.problemIndex,
+      fileName: record.fileName,
+      contentType: record.contentType,
+      size: record.size,
+      updatedAt: record.updatedAt,
+    });
+  },
+);
+
+app.delete(
+  "/api/assignments/:id/problems/:problemIndex/image",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+
+    const record = await removeProblemImage(
+      request.user.id,
+      request.params.id,
+      Number(request.params.problemIndex),
+    );
+    if (record) {
+      await deleteBlobIfExists(record.blobName);
+    }
+
+    response.status(204).send();
+  },
+);
+
+app.get(
   "/api/assignments/:id/problems/:problemIndex/scene",
   requireDb,
   requireAuth,
@@ -555,7 +733,7 @@ app.put(
 
 app.use((error, _request, response, next) => {
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {
-    response.status(413).json({ message: "PDF exceeds the 20MB upload limit." });
+    response.status(413).json({ message: "Uploaded file exceeds size limit." });
     return;
   }
   next(error);

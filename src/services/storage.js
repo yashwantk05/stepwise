@@ -33,21 +33,21 @@ const buildError = async (response) => {
   return error;
 };
 
-const request = async (path, options = {}) => {
-  const userHeaders =
-    cachedUser?.id
-      ? {
-          "x-stepwise-user-id": cachedUser.id,
-          "x-stepwise-user-name": cachedUser.name || "",
-          "x-stepwise-user-email": cachedUser.email || "",
-          "x-stepwise-user-provider": cachedUser.provider || "",
-        }
-      : {};
+const buildUserHeaders = () =>
+  cachedUser?.id
+    ? {
+        "x-stepwise-user-id": cachedUser.id,
+        "x-stepwise-user-name": cachedUser.name || "",
+        "x-stepwise-user-email": cachedUser.email || "",
+        "x-stepwise-user-provider": cachedUser.provider || "",
+      }
+    : {};
 
+const request = async (path, options = {}) => {
   const response = await fetch(toUrl(path), {
     credentials: "include",
     headers: {
-      ...userHeaders,
+      ...buildUserHeaders(),
       ...(options.headers || {}),
     },
     ...options,
@@ -182,6 +182,20 @@ export const deleteAssignmentPdf = async (assignmentId) =>
     method: "DELETE",
   });
 
+export const downloadAssignmentPdfBlob = async (assignmentId) => {
+  const response = await fetch(
+    toUrl(`/assignments/${encodeURIComponent(assignmentId)}/pdf/download`),
+    {
+      credentials: "include",
+      headers: buildUserHeaders(),
+    },
+  );
+  if (!response.ok) {
+    throw await buildError(response);
+  }
+  return response.blob();
+};
+
 export const getProblemScene = async (assignmentId, problemIndex) =>
   request(
     `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/scene`,
@@ -198,3 +212,42 @@ export const saveProblemScene = async (assignmentId, problemIndex, scene) =>
       body: JSON.stringify({ scene }),
     },
   );
+
+export const getProblemImage = async (assignmentId, problemIndex) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,
+  );
+
+export const saveProblemImage = async (assignmentId, problemIndex, file) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,
+    {
+      method: "PUT",
+      body: formData,
+    },
+  );
+};
+
+export const deleteProblemImage = async (assignmentId, problemIndex) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,
+    {
+      method: "DELETE",
+    },
+  );
+
+export const downloadProblemImageBlob = async (assignmentId, problemIndex) => {
+  const response = await fetch(
+    toUrl(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image/download`),
+    {
+      credentials: "include",
+      headers: buildUserHeaders(),
+    },
+  );
+  if (!response.ok) {
+    throw await buildError(response);
+  }
+  return response.blob();
+};

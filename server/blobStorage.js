@@ -32,6 +32,13 @@ const createSceneBlobName = (userId, assignmentId, problemIndex) => {
   return `${safeUser}/${safeAssignment}/problem-${safeProblem}.excalidraw`;
 };
 
+const createProblemImageBlobName = (userId, assignmentId, problemIndex) => {
+  const safeUser = sanitize(userId, "user");
+  const safeAssignment = sanitize(assignmentId, "assignment");
+  const safeProblem = Number(problemIndex) || 1;
+  return `${safeUser}/${safeAssignment}/problem-${safeProblem}.png`;
+};
+
 const getBlobServiceClient = () => {
   if (CONNECTION_STRING) {
     return BlobServiceClient.fromConnectionString(CONNECTION_STRING);
@@ -152,4 +159,41 @@ export const downloadProblemSceneFromBlob = async (blobName) => {
 
   const body = Buffer.concat(chunks).toString("utf-8");
   return JSON.parse(body);
+};
+
+export const uploadProblemImageToBlob = async ({
+  userId,
+  assignmentId,
+  problemIndex,
+  buffer,
+  contentType = "image/png",
+}) => {
+  const container = await requireContainer();
+  const blobName = createProblemImageBlobName(userId, assignmentId, problemIndex);
+  const blobClient = container.getBlockBlobClient(blobName);
+  await blobClient.uploadData(buffer, {
+    blobHTTPHeaders: {
+      blobContentType: contentType,
+    },
+  });
+  return {
+    blobName,
+    fileName: `problem-${Number(problemIndex) || 1}.png`,
+    contentType,
+    size: buffer.length,
+  };
+};
+
+export const downloadProblemImageFromBlob = async (blobName) => {
+  const container = await requireContainer();
+  const blobClient = container.getBlobClient(blobName);
+  const exists = await blobClient.exists();
+  if (!exists) return null;
+
+  const response = await blobClient.download();
+  return {
+    stream: response.readableStreamBody,
+    contentType: response.contentType || "image/png",
+    contentLength: Number(response.contentLength || 0),
+  };
 };

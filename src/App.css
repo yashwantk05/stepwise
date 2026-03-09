@@ -130,7 +130,14 @@
   gap: 8px;
 }
 
+.answer-key-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 input,
+textarea,
 select,
 button {
   border: 1px solid var(--line);
@@ -140,9 +147,15 @@ button {
 }
 
 input,
+textarea,
 select {
   min-width: 220px;
   background: var(--surface-strong);
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
 }
 
 button {

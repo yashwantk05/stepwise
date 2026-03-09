@@ -226,6 +226,23 @@ export const saveProblemScene = async (assignmentId, problemIndex, scene) =>
     },
   );
 
+export const getProblemContext = async (assignmentId, problemIndex) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/context`,
+  );
+
+export const saveProblemContext = async (assignmentId, problemIndex, { answerKey }) =>
+  request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/context`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ answerKey }),
+    },
+  );
+
 export const getProblemImage = async (assignmentId, problemIndex) =>
   request(
     `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`,

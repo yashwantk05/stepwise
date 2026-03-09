@@ -147,8 +147,14 @@ export const initDb = async () => {
         assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
         problem_index INTEGER NOT NULL,
         content TEXT NOT NULL,
+        answer_key TEXT,
         updated_at BIGINT NOT NULL
       );
+    `);
+
+    await activePool.query(`
+      ALTER TABLE problem_contexts
+      ADD COLUMN IF NOT EXISTS answer_key TEXT;
     `);
   })();
 
@@ -564,6 +570,7 @@ const mapProblemContext = (row) => ({
   assignmentId: row.assignment_id,
   problemIndex: Number(row.problem_index),
   content: row.content,
+  answerKey: row.answer_key || "",
   updatedAt: Number(row.updated_at),
 });
 
@@ -571,7 +578,7 @@ export const getProblemContext = async (userId, assignmentId, problemIndex) => {
   const id = `${userId}:${assignmentId}:${problemIndex}`;
   const { rows } = await getPool().query(
     `
-      SELECT id, user_id, assignment_id, problem_index, content, updated_at
+      SELECT id, user_id, assignment_id, problem_index, content, answer_key, updated_at
       FROM problem_contexts
       WHERE id = $1
       LIMIT 1;
@@ -587,22 +594,50 @@ export const upsertProblemContext = async (
   assignmentId,
   problemIndex,
   content,
+  answerKey = null,
 ) => {
   const id = `${userId}:${assignmentId}:${problemIndex}`;
   const now = Date.now();
   const { rows } = await getPool().query(
     `
       INSERT INTO problem_contexts (
-        id, user_id, assignment_id, problem_index, content, updated_at
+        id, user_id, assignment_id, problem_index, content, answer_key, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (id)
       DO UPDATE SET
         content = EXCLUDED.content,
+        answer_key = EXCLUDED.answer_key,
         updated_at = EXCLUDED.updated_at
-      RETURNING id, user_id, assignment_id, problem_index, content, updated_at;
+      RETURNING id, user_id, assignment_id, problem_index, content, answer_key, updated_at;
     `,
-    [id, userId, assignmentId, problemIndex, content, now],
+    [id, userId, assignmentId, problemIndex, content, answerKey, now],
+  );
+  return mapProblemContext(rows[0]);
+};
+
+export const setProblemAnswerKey = async (
+  userId,
+  assignmentId,
+  problemIndex,
+  answerKey,
+) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const now = Date.now();
+  const normalizedAnswerKey = String(answerKey || "").trim() || null;
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO problem_contexts (
+        id, user_id, assignment_id, problem_index, content, answer_key, updated_at
+      )
+      VALUES ($1, $2, $3, $4, '', $5, $6)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        answer_key = EXCLUDED.answer_key,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, user_id, assignment_id, problem_index, content, answer_key, updated_at;
+    `,
+    [id, userId, assignmentId, problemIndex, normalizedAnswerKey, now],
   );
   return mapProblemContext(rows[0]);
 };
@@ -613,7 +648,7 @@ export const removeProblemContext = async (userId, assignmentId, problemIndex) =
     `
       DELETE FROM problem_contexts
       WHERE id = $1
-      RETURNING id, user_id, assignment_id, problem_index, content, updated_at;
+      RETURNING id, user_id, assignment_id, problem_index, content, answer_key, updated_at;
     `,
     [id],
   );

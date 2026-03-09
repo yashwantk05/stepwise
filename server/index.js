@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,7 @@ import {
   removeAssignmentPdf,
   removeAssignment,
   setAssignmentProblemCount,
+  setProblemAnswerKey,
   upsertProblemContext,
   upsertProblemImage,
   upsertAssignmentPdf,
@@ -103,6 +105,8 @@ const createImageUrlPart = (buffer, mimeType = "image/png") => ({
   },
 });
 
+const sha256 = (buffer) => createHash("sha256").update(buffer).digest("hex");
+
 const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperature = 0.3 }) => {
   const { endpoint, apiKey, apiVersion, deployment } = getAzureConfig();
   const response = await fetch(
@@ -130,7 +134,11 @@ const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperatu
   return payload?.choices?.[0]?.message?.content?.trim() || "No hint available yet.";
 };
 
-const analyzeProblemContextWithAzure = async (buffer, mimeType = "image/png") =>
+const analyzeProblemContextWithAzure = async (
+  buffer,
+  mimeType = "image/png",
+  answerKey = "",
+) =>
   requestAzureChatCompletion({
     maxTokens: 350,
     temperature: 0.2,
@@ -147,6 +155,9 @@ Tasks:
 1. Read the problem carefully.
 2. Solve it fully.
 3. Produce reusable tutoring context for future hints.
+
+Provided answer key:
+${answerKey || "No answer key is available."}
 
 Return exactly these sections:
 Problem:
@@ -169,6 +180,7 @@ Pitfalls:
 
 Rules:
 - Be concise and precise.
+- If an answer key is available, verify your solved answer against it.
 - If text is unclear, say what you infer.
 - ALL mathematical expressions MUST be written in LaTeX using $...$.
             `.trim(),
@@ -185,6 +197,7 @@ const analyzeDrawingWithAzure = async ({
   problemBuffer = null,
   problemMimeType = "image/png",
   problemContext = "",
+  answerKey = "",
 }) => {
   const content = [
     {
@@ -195,14 +208,23 @@ You are a strict math tutor checking a student's handwritten solution.
 Stored problem context:
 ${problemContext || "No stored problem context is available."}
 
+Answer key:
+${answerKey || "No answer key is available."}
+
 Tasks:
-1. Identify the student's current work from the drawing image.
-2. Compare it against the stored problem context and expected solution path.
-3. Verify whether the latest visible step is valid.
-4. If incorrect, explain the mistake briefly.
-5. Provide the best next hint, not the full solution.
+1. Read the drawing image and extract the latest visible student line.
+2. Compare that latest line against the stored problem context and expected solution path.
+3. If an answer key is available, validate your reasoning against it before answering.
+4. Verify whether the latest visible step is valid.
+5. If incorrect, explain the mistake briefly.
+6. Provide the best next hint, not the full solution.
 
 Rules:
+- Anchor your hint to the latest visible student step in the drawing.
+- Do not restart from step 1 if any valid intermediate student work is visible.
+- Only provide first-step guidance when the board is blank or unreadable.
+- If "Observed student step" is "Unreadable", do not invent equations or numbers.
+- If "Observed student step" is "Unreadable", the "Correct next line" must be exactly "Not enough work shown yet."
 - Prefer a minimal next-step hint.
 - Never assume the student is correct.
 - If the drawing is too incomplete, say what to do next.
@@ -210,6 +232,9 @@ Rules:
 - ALL mathematical expressions MUST be written in LaTeX using $...$.
 
 Format:
+Observed student step:
+<verbatim or best-effort reading of latest line; "Unreadable" if unclear>
+
 Hint:
 <short hint>
 
@@ -241,6 +266,25 @@ Correct next line:
       },
     ],
   });
+};
+
+const enforceHintOutputGuards = (text) => {
+  const raw = String(text || "").trim();
+  if (!raw) return "No hint available yet.";
+
+  const unreadable = /Observed student step:\s*Unreadable/i.test(raw);
+  if (!unreadable) return raw;
+
+  return [
+    "Observed student step:",
+    "Unreadable",
+    "",
+    "Hint:",
+    "The latest line is unclear. Rewrite the most recent equation clearly so I can validate it and give the exact next step.",
+    "",
+    "Correct next line:",
+    "Not enough work shown yet.",
+  ].join("\n");
 };
 
 const getOrigin = (request) => {
@@ -418,6 +462,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
     let problemBuffer = null;
     let problemMimeType = "image/png";
     let problemContext = "";
+    let answerKey = "";
 
     if (assignmentId && problemIndex != null) {
       const [contextRecord, imageRecord] = await Promise.all([
@@ -425,6 +470,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         getProblemImage(request.user.id, assignmentId, problemIndex),
       ]);
       problemContext = contextRecord?.content || "";
+      answerKey = contextRecord?.answerKey || "";
 
       if (imageRecord?.blobName) {
         const blob = await downloadProblemImageBufferFromBlob(imageRecord.blobName);
@@ -441,8 +487,27 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       problemBuffer,
       problemMimeType,
       problemContext,
+      answerKey,
     });
-    response.json({ result });
+    response.json({
+      result: enforceHintOutputGuards(result),
+      debug: {
+        drawingImage: {
+          bytes: file.buffer.length,
+          sha256: sha256(file.buffer),
+          mimeType: file.mimetype || "image/png",
+        },
+        problemImage: problemBuffer
+          ? {
+              bytes: problemBuffer.length,
+              sha256: sha256(problemBuffer),
+              mimeType: problemMimeType,
+            }
+          : null,
+        problemContextChars: problemContext.length,
+        answerKeyChars: answerKey.length,
+      },
+    });
   } catch (error) {
     console.error("AI analyze failed:", error.message);
     response.status(503).json({ result: "AI tutor temporarily unavailable." });
@@ -752,6 +817,56 @@ app.get("/api/assignments/:id/pdf/download", requireDb, requireAuth, async (requ
 });
 
 app.get(
+  "/api/assignments/:id/problems/:problemIndex/context",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const record = await getProblemContext(request.user.id, request.params.id, problemIndex);
+    response.json(
+      record
+        ? {
+            assignmentId: record.assignmentId,
+            problemIndex: record.problemIndex,
+            content: record.content,
+            answerKey: record.answerKey,
+            updatedAt: record.updatedAt,
+          }
+        : null,
+    );
+  },
+);
+
+app.put(
+  "/api/assignments/:id/problems/:problemIndex/context",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const answerKey = String(request.body?.answerKey || "");
+    const record = await setProblemAnswerKey(
+      request.user.id,
+      request.params.id,
+      problemIndex,
+      answerKey,
+    );
+    response.json({
+      assignmentId: record.assignmentId,
+      problemIndex: record.problemIndex,
+      content: record.content,
+      answerKey: record.answerKey,
+      updatedAt: record.updatedAt,
+    });
+  },
+);
+
+app.get(
   "/api/assignments/:id/problems/:problemIndex/image",
   requireDb,
   requireAuth,
@@ -831,7 +946,10 @@ app.put(
       return;
     }
 
-    const existingRecord = await getProblemImage(request.user.id, request.params.id, problemIndex);
+    const [existingRecord, existingContextRecord] = await Promise.all([
+      getProblemImage(request.user.id, request.params.id, problemIndex),
+      getProblemContext(request.user.id, request.params.id, problemIndex),
+    ]);
 
     const blob = await uploadProblemImageToBlob({
       userId: request.user.id,
@@ -852,12 +970,14 @@ app.put(
       const generatedContext = await analyzeProblemContextWithAzure(
         file.buffer,
         file.mimetype || "image/png",
+        existingContextRecord?.answerKey || "",
       );
       await upsertProblemContext(
         request.user.id,
         request.params.id,
         problemIndex,
         generatedContext,
+        existingContextRecord?.answerKey || null,
       );
     } catch (error) {
       console.error("Problem context generation failed:", error.message);

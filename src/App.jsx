@@ -19,11 +19,13 @@ import {
   getAssignmentPdf,
   getCurrentUser,
   getGoogleSignInUrl,
+  getProblemContext,
   getProblemImage,
   getProblemScene,
   listAssignments,
   requestAccountDeletion,
   saveAssignmentPdf,
+  saveProblemContext,
   saveProblemImage,
   saveProblemScene,
   signOut,
@@ -557,6 +559,9 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [sceneRevision, setSceneRevision] = useState(0);
   const [problemImageMeta, setProblemImageMeta] = useState(null);
   const [problemImageUrl, setProblemImageUrl] = useState("");
+  const [problemContextMeta, setProblemContextMeta] = useState(null);
+  const [answerKeyDraft, setAnswerKeyDraft] = useState("");
+  const [isSavingAnswerKey, setIsSavingAnswerKey] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [pickerStatus, setPickerStatus] = useState("");
   const [pdfPageCount, setPdfPageCount] = useState(0);
@@ -605,6 +610,12 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     setProblemImageMeta(metadata);
     setProblemImageUrl(objectUrl);
   }, [assignmentId, clearProblemImageUrl, problemIndex]);
+
+  const loadProblemContext = useCallback(async () => {
+    const context = await getProblemContext(assignmentId, problemIndex);
+    setProblemContextMeta(context);
+    setAnswerKeyDraft(context?.answerKey || "");
+  }, [assignmentId, problemIndex]);
 
   const closePicker = useCallback(() => {
     setIsPickerOpen(false);
@@ -677,6 +688,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       }
 
       const storedScene = await getProblemScene(assignmentId, problemIndex);
+      await loadProblemContext();
       const scene = getPersistedScene(storedScene?.scene || getDefaultScene());
       setInitialScene(scene);
       setSceneRevision((revision) => revision + 1);
@@ -692,7 +704,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     };
 
     loadData().catch(() => setStatus("Unable to load whiteboard."));
-  }, [assignmentId, clearProblemImageUrl, loadProblemImage, problemIndex]);
+  }, [assignmentId, clearProblemImageUrl, loadProblemContext, loadProblemImage, problemIndex]);
 
   const blobToBase64 = useCallback(
     (blob) =>
@@ -788,6 +800,20 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       await renderSelectedPage(pdfDocument, 1);
     } catch {
       setPickerStatus("Unable to open PDF. Upload a PDF first.");
+    }
+  };
+
+  const handleSaveAnswerKey = async () => {
+    setIsSavingAnswerKey(true);
+    try {
+      const saved = await saveProblemContext(assignmentId, problemIndex, {
+        answerKey: answerKeyDraft,
+      });
+      setProblemContextMeta(saved);
+      setAnswerKeyDraft(saved?.answerKey || "");
+      setStatus(`Saved answer key at ${new Date().toLocaleTimeString()}.`);
+    } finally {
+      setIsSavingAnswerKey(false);
     }
   };
 
@@ -1034,6 +1060,33 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       <section className="panel">
         <h2>AI Study Buddy</h2>
         <p className="subtle">{hint}</p>
+      </section>
+
+      <section className="panel">
+        <h2>Answer Key</h2>
+        <p className="subtle">
+          Optional. If provided, the AI uses it to validate generated solutions and hints.
+        </p>
+        <div className="answer-key-editor">
+          <textarea
+            value={answerKeyDraft}
+            onChange={(event) => setAnswerKeyDraft(event.target.value)}
+            placeholder="Example: Final answer is $x = 4$. Accept equivalent simplified forms only."
+            rows={4}
+          />
+          <div className="control-row">
+            <button
+              type="button"
+              onClick={() => void handleSaveAnswerKey()}
+              disabled={isSavingAnswerKey}
+            >
+              {isSavingAnswerKey ? "Saving..." : "Save Answer Key"}
+            </button>
+            {problemContextMeta?.updatedAt ? (
+              <p className="subtle">Updated {formatDate(problemContextMeta.updatedAt)}</p>
+            ) : null}
+          </div>
+        </div>
       </section>
 
       {isPickerOpen && (

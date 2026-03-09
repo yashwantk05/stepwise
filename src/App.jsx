@@ -500,7 +500,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [aspectRatio, setAspectRatio] = useState(4 / 3);
   const [ratioWidth, setRatioWidth] = useState(4);
   const [ratioHeight, setRatioHeight] = useState(3);
-  const latestSceneRef = useRef(getDefaultScene());
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
   const pdfDocumentRef = useRef(null);

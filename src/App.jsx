@@ -156,6 +156,11 @@ const getPersistedScene = (scene) => {
 const formatDate = (time) => new Date(time).toLocaleString();
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const WHITEBOARD_EXPORT_SCALE = 4;
+const WHITEBOARD_MIN_DIMENSION = 1400;
+const PDF_RENDER_SCALE = 2.5;
+const PDF_MAX_WIDTH = 2400;
+const PROBLEM_CROP_SCALE = 2;
 const normalizeProblemCount = (value) => {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) return MIN_PROBLEM_COUNT;
@@ -178,12 +183,24 @@ const createCroppedImageBlob = async (sourceUrl, cropArea) => {
   const y = clamp(Math.round(cropArea.y), 0, image.naturalHeight - height);
 
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
+  canvas.width = width * PROBLEM_CROP_SCALE;
+  canvas.height = height * PROBLEM_CROP_SCALE;
 
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Unable to initialize image crop context.");
-  context.drawImage(image, x, y, width, height, 0, 0, width, height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(
+    image,
+    x,
+    y,
+    width,
+    height,
+    0,
+    0,
+    width * PROBLEM_CROP_SCALE,
+    height * PROBLEM_CROP_SCALE,
+  );
 
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!blob) throw new Error("Unable to export cropped problem image.");
@@ -638,8 +655,11 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       setIsRenderingPage(true);
       try {
         const page = await pdfDocument.getPage(pageNumber);
-        const initialViewport = page.getViewport({ scale: 1.5 });
-        const boundedScale = initialViewport.width > 1400 ? 1.5 * (1400 / initialViewport.width) : 1.5;
+        const initialViewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+        const boundedScale =
+          initialViewport.width > PDF_MAX_WIDTH
+            ? PDF_RENDER_SCALE * (PDF_MAX_WIDTH / initialViewport.width)
+            : PDF_RENDER_SCALE;
         const viewport = page.getViewport({ scale: boundedScale });
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
@@ -727,9 +747,29 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         elements,
         appState,
         files,
+        exportScale: WHITEBOARD_EXPORT_SCALE,
       });
 
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      const exportCanvas = (() => {
+        const maxDimension = Math.max(canvas.width, canvas.height);
+        if (!maxDimension) return canvas;
+        if (maxDimension >= WHITEBOARD_MIN_DIMENSION) return canvas;
+
+        const scale = WHITEBOARD_MIN_DIMENSION / maxDimension;
+        if (scale <= 1) return canvas;
+
+        const scaledCanvas = document.createElement("canvas");
+        scaledCanvas.width = Math.round(canvas.width * scale);
+        scaledCanvas.height = Math.round(canvas.height * scale);
+        const context = scaledCanvas.getContext("2d");
+        if (!context) return canvas;
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = "high";
+        context.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+        return scaledCanvas;
+      })();
+
+      const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, "image/png"));
       if (!blob) return;
 
       const base64 = await blobToBase64(blob);
@@ -738,14 +778,18 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
       setHint("Generating hint...");
       try {
-        const result = await analyzeDrawing(blob, { assignmentId, problemIndex });
-        const nextHint = typeof result?.result === "string" ? result.result.trim() : "";
+        const result = await analyzeDrawing(blob, {
+          assignmentId,
+          problemIndex,
+          problemImageUrl,
+        });
+        const nextHint = typeof result?.hint === "string" ? result.hint.trim() : "";
         setHint(nextHint || "No hint available yet.");
       } catch {
         setHint("Hint service unavailable.");
       }
     },
-    [assignmentId, blobToBase64, problemIndex],
+    [assignmentId, blobToBase64, problemImageUrl, problemIndex],
   );
 
   const handleChange = useCallback((elements, appState, files) => {

@@ -210,6 +210,10 @@ const WHITEBOARD_MIN_DIMENSION = 1400;
 const PDF_RENDER_SCALE = 2.5;
 const PDF_MAX_WIDTH = 2400;
 const PROBLEM_CROP_SCALE = 2;
+const MAX_HINT_ITEMS = 3;
+const MAX_ERROR_ITEMS = 3;
+const MAX_CALCULATE_RESULTS = 2;
+const MAX_EXPLAIN_RESULTS = 1;
 const normalizeProblemCount = (value) => {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) return MIN_PROBLEM_COUNT;
@@ -619,11 +623,11 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     [manualInsights, insights],
   );
   const hintInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "hint"),
+    () => combinedInsights.filter((entry) => entry.kind === "hint").slice(0, MAX_HINT_ITEMS),
     [combinedInsights],
   );
   const wrongInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "wrong"),
+    () => combinedInsights.filter((entry) => entry.kind === "wrong").slice(0, MAX_ERROR_ITEMS),
     [combinedInsights],
   );
   const [sceneRevision, setSceneRevision] = useState(0);
@@ -645,8 +649,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [boardSelectionRect, setBoardSelectionRect] = useState(null);
   const [isBoardSelecting, setIsBoardSelecting] = useState(false);
   const [isAiSelecting, setIsAiSelecting] = useState(false);
-  const [calcPills, setCalcPills] = useState([]);
   const [selectionResults, setSelectionResults] = useState([]);
+  const [isStylePanelOpen, setIsStylePanelOpen] = useState(true);
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
   const pdfDocumentRef = useRef(null);
@@ -847,7 +851,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
         const nextInsights = deriveInsightsFromAiResult(result, "explain");
         if (nextInsights.length > 0) {
-          setManualInsights((previous) => [...nextInsights, ...previous]);
+          appendLimitedInsights(nextInsights);
         }
 
         setHint("AI feedback updated.");
@@ -855,7 +859,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         setHint("Hint service unavailable.");
       }
     },
-    [assignmentId, blobToBase64, problemImageUrl, problemIndex],
+    [appendLimitedInsights, assignmentId, blobToBase64, problemImageUrl, problemIndex],
   );
 
   const handleChange = useCallback((elements, appState, files) => {
@@ -1018,7 +1022,49 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     });
   };
 
+  const appendLimitedInsights = useCallback((incomingInsights) => {
+    setManualInsights((previous) => {
+      const merged = [...incomingInsights, ...previous];
+      let hintCount = 0;
+      let errorCount = 0;
 
+      return merged.filter((entry) => {
+        if (entry.kind === "wrong") {
+          if (errorCount >= MAX_ERROR_ITEMS) return false;
+          errorCount += 1;
+          return true;
+        }
+
+        if (hintCount >= MAX_HINT_ITEMS) return false;
+        hintCount += 1;
+        return true;
+      });
+    });
+  }, []);
+
+  const appendLimitedSelectionResult = useCallback((incomingResult) => {
+    setSelectionResults((previous) => {
+      const merged = [incomingResult, ...previous];
+      let explainCount = 0;
+      let calculateCount = 0;
+
+      return merged.filter((entry) => {
+        if (entry.mode === "explain") {
+          if (explainCount >= MAX_EXPLAIN_RESULTS) return false;
+          explainCount += 1;
+          return true;
+        }
+
+        if (entry.mode === "calculate") {
+          if (calculateCount >= MAX_CALCULATE_RESULTS) return false;
+          calculateCount += 1;
+          return true;
+        }
+
+        return false;
+      });
+    });
+  }, []);
 
   const startSelectionTool = (mode) => {
     setSelectionMode(mode);
@@ -1084,44 +1130,27 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
         const newInsights = deriveInsightsFromAiResult(result, mode);
         if (newInsights.length > 0) {
-          setManualInsights((previous) => [...newInsights, ...previous]);
+          appendLimitedInsights(newInsights);
         }
-
-        const selectionLeftPct =
-          ((selectionRect.x + selectionRect.width / 2) / Math.max(bounds.width, 1)) * 100;
-        const selectionTopPct =
-          ((selectionRect.y + selectionRect.height / 2) / Math.max(bounds.height, 1)) * 100;
 
         if (mode === "calculate") {
           const value = readCalcValueFromAiResult(result);
           if (value) {
-            setSelectionResults((previous) => [
-              {
-                id: "result-" + Date.now(),
-                mode: "calculate",
-                cardText: `Your calculated result is ${value}`,
-                boardText: value,
-                leftPct: selectionLeftPct,
-                topPct: selectionTopPct,
-              },
-              ...previous,
-            ]);
+            appendLimitedSelectionResult({
+              id: "result-" + Date.now(),
+              mode: "calculate",
+              cardText: `Your calculated result is ${value}`,
+            });
           }
           setHint("Calculation complete.");
         } else {
           const explanation = readExplainTextFromAiResult(result);
           if (explanation) {
-            setSelectionResults((previous) => [
-              {
-                id: "result-" + Date.now(),
-                mode: "explain",
-                cardText: explanation,
-                boardText: explanation,
-                leftPct: selectionLeftPct,
-                topPct: selectionTopPct,
-              },
-              ...previous,
-            ]);
+            appendLimitedSelectionResult({
+              id: "result-" + Date.now(),
+              mode: "explain",
+              cardText: explanation,
+            });
           }
           setHint("Explanation ready.");
         }
@@ -1131,7 +1160,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         setIsAiSelecting(false);
       }
     },
-    [assignmentId, problemImageUrl, problemIndex],
+    [appendLimitedInsights, appendLimitedSelectionResult, assignmentId, problemImageUrl, problemIndex],
   );
 
   const handleAiSelectionStart = (event) => {
@@ -1184,26 +1213,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     });
     setBoardSelectionRect(null);
   };
-
-
-  const handleSelectionResultClick = (resultId) => {
-    const selectedResult = selectionResults.find((entry) => entry.id === resultId);
-    if (!selectedResult) return;
-
-    setCalcPills((previous) => [
-      ...previous,
-      {
-        id: "placed-" + Date.now(),
-        text: selectedResult.boardText,
-        leftPct: selectedResult.leftPct,
-        topPct: selectedResult.topPct,
-        mode: selectedResult.mode,
-      },
-    ]);
-
-    setSelectionResults((previous) => previous.filter((entry) => entry.id !== resultId));
-  };
-
   const handleRemoveProblemImage = async () => {
     await deleteProblemImage(assignmentId, problemIndex);
     setProblemImageMeta(null);
@@ -1300,7 +1309,16 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       </section>
 
       <section className="whiteboard-stage">
-        <section className="canvas-area" ref={whiteboardAreaRef}>
+        <section className={`canvas-area ${isStylePanelOpen ? "" : "style-panel-hidden"}`} ref={whiteboardAreaRef}>
+          <button
+            type="button"
+            className="style-panel-toggle"
+            onClick={() => setIsStylePanelOpen((current) => !current)}
+            aria-expanded={isStylePanelOpen}
+          >
+            Styles {isStylePanelOpen ? "v" : ">"}
+          </button>
+
           <Excalidraw
             key={`${assignmentId}-${problemIndex}-${sceneRevision}`}
             initialData={initialScene}
@@ -1346,16 +1364,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               )}
             </div>
           )}
-
-          {calcPills.map((pill) => (
-            <div
-              key={pill.id}
-              className={`ai-calc-pill ${pill.mode === "explain" ? "ai-calc-pill-explain" : "ai-calc-pill-calculate"}`}
-              style={{ left: `${pill.leftPct}%`, top: `${pill.topPct}%` }}
-            >
-              {pill.text}
-            </div>
-          ))}
         </section>
 
         <aside className="insights-rail">
@@ -1376,6 +1384,19 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               )}
             </div>
 
+            {selectionResults.length > 0 && (
+              <section className="selection-results" aria-label="Selection results">
+                {selectionResults.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className={`selection-result-card selection-result-card-${entry.mode}`}
+                  >
+                    {entry.cardText}
+                  </div>
+                ))}
+              </section>
+            )}
+
             <div className="insight-group">
               <h3>Errors</h3>
               {wrongInsights.length > 0 ? (
@@ -1390,21 +1411,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               )}
             </div>
           </section>
-
-          {selectionResults.length > 0 && (
-            <section className="selection-results" aria-label="Selection results">
-              {selectionResults.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className={`selection-result-card selection-result-card-${entry.mode}`}
-                  onClick={() => handleSelectionResultClick(entry.id)}
-                >
-                  {entry.cardText}
-                </button>
-              ))}
-            </section>
-          )}
         </aside>
       </section>
 

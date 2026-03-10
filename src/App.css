@@ -248,6 +248,24 @@ button.outline {
   box-shadow: var(--shadow);
 }
 
+.style-panel-toggle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 14;
+  padding: 6px 10px;
+  border: 1px solid #1e3a8a;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.canvas-area.style-panel-hidden .excalidraw .App-menu__left {
+  display: none !important;
+}
+
 .ai-select-layer {
   position: absolute;
   inset: 0;

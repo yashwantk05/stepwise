@@ -1,3 +1,5 @@
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
@@ -554,6 +556,17 @@ function AssignmentDetailPage({ assignmentId, navigate }) {
   );
 }
 
+const LatexHint = ({ text }) => {
+  const html = text.replace(/\\\((.+?)\\\)/g, (_, expr) => {
+    try {
+      return katex.renderToString(expr, { throwOnError: false });
+    } catch {
+      return expr;
+    }
+  });
+  return <p className="subtle" dangerouslySetInnerHTML={{ __html: html }} />;
+};
+
 function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [status, setStatus] = useState("Loading whiteboard...");
@@ -1103,7 +1116,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
       <section className="panel">
         <h2>AI Study Buddy</h2>
-        <p className="subtle">{hint}</p>
+        <LatexHint text={hint} />
       </section>
 
       <section className="panel">

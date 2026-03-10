@@ -581,7 +581,8 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
 
     let analysis;
     try {
-      analysis = JSON.parse(analysisRaw);
+      const cleaned = analysisRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+      analysis = JSON.parse(cleaned);
     } catch {
       analysis = { observed_step: "Unreadable" };
     }
@@ -1094,7 +1095,8 @@ app.put(
 
       let parsed;
       try {
-        parsed = JSON.parse(raw);
+        const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+        parsed = JSON.parse(cleaned);
       } catch {
         parsed = { summary: "Failed to parse context" };
       }

@@ -564,3 +564,14 @@ button.outline {
   }
 }
 
+
+/* Reset Excalidraw internal buttons to their own styles */
+.excalidraw button,
+.excalidraw button:hover {
+  color: unset;
+  background: unset;
+  border: unset;
+  border-radius: unset;
+  padding: unset;
+  opacity: unset;
+}

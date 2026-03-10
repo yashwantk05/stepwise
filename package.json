@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@azure/storage-blob": "^12.31.0",
+    "katex": "^0.16.9",
     "@excalidraw/excalidraw": "^0.18.0",
     "express": "^5.2.1",
     "multer": "^2.1.1",

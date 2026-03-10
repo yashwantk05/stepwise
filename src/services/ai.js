@@ -45,7 +45,7 @@ const debugEchoImage = async (blob, label) => {
 
 export async function analyzeDrawing(
   blob,
-  { assignmentId, problemIndex, problemImageUrl } = {},
+  { assignmentId, problemIndex, problemImageUrl, mode } = {},
 ) {
   if (isDebugImagesEnabled()) {
     void debugEchoImage(blob, "whiteboard").catch(() => {});
@@ -65,6 +65,9 @@ export async function analyzeDrawing(
   if (Number.isInteger(problemIndex)) {
     formData.append("problemIndex", String(problemIndex));
   }
+  if (mode) {
+    formData.append("mode", String(mode));
+  }
 
   const endpoint = import.meta.env.VITE_AI_ANALYZE_URL || `${API_BASE}/ai/analyze`;
 
@@ -81,3 +84,4 @@ export async function analyzeDrawing(
 
   return response.json();
 }
+

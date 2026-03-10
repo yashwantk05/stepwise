@@ -135,50 +135,6 @@ const parseInsightsForProblem = (assignment, problemIndex) => {
   return parsed.map((entry, index) => ({ id: `insight-${index}`, ...entry }));
 };
 
-
-
-const deriveInsightsFromAiResult = (result, requestedMode) => {
-  const entries = [];
-
-  const toEntries = (items, kind) =>
-    Array.isArray(items)
-      ? items
-          .map((item) => String(item || "").trim())
-          .filter(Boolean)
-          .map((content) => ({ kind, content }))
-      : [];
-
-  entries.push(...toEntries(result?.hints, "hint"));
-  entries.push(...toEntries(result?.errors || result?.wrong || result?.mistakes, "wrong"));
-
-  const directMessage =
-    result?.explanation ||
-    result?.hint ||
-    result?.result ||
-    result?.message ||
-    result?.answer ||
-    result?.value ||
-    "";
-
-  if (String(directMessage).trim() && requestedMode !== "calculate") {
-    entries.push({
-      kind: "hint",
-      content: String(directMessage).trim(),
-    });
-  }
-
-  return entries.map((entry, index) => ({
-    id: "ai-" + Date.now() + "-" + index,
-    kind: entry.kind,
-    content: entry.content,
-  }));
-};
-
-const readCalcValueFromAiResult = (result) => {
-  const raw = result?.value || result?.answer || result?.result || result?.message || "";
-  return String(raw || "").trim();
-};
-
 const getPersistedScene = (scene) => {
   const normalizedElements = Array.isArray(scene?.elements) ? scene.elements : [];
   const normalizedFiles =
@@ -603,23 +559,19 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [status, setStatus] = useState("Loading whiteboard...");
   const [hint, setHint] = useState("Start drawing to receive hints.");
   const [initialScene, setInitialScene] = useState(getDefaultScene());
+  const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const latestSceneRef = useRef(getDefaultScene());
   const insights = useMemo(
     () => parseInsightsForProblem(assignment, problemIndex),
     [assignment, problemIndex],
   );
-  const [manualInsights, setManualInsights] = useState([]);
-  const combinedInsights = useMemo(
-    () => [...manualInsights, ...insights],
-    [manualInsights, insights],
-  );
   const hintInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "hint"),
-    [combinedInsights],
+    () => insights.filter((entry) => entry.kind === "hint"),
+    [insights],
   );
   const wrongInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "wrong"),
-    [combinedInsights],
+    () => insights.filter((entry) => entry.kind === "wrong"),
+    [insights],
   );
   const [sceneRevision, setSceneRevision] = useState(0);
   const [problemImageMeta, setProblemImageMeta] = useState(null);
@@ -636,11 +588,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [isSelecting, setIsSelecting] = useState(false);
   const [isRenderingPage, setIsRenderingPage] = useState(false);
   const [isSavingProblemImage, setIsSavingProblemImage] = useState(false);
-  const [selectionMode, setSelectionMode] = useState(null);
-  const [boardSelectionRect, setBoardSelectionRect] = useState(null);
-  const [isBoardSelecting, setIsBoardSelecting] = useState(false);
-  const [isAiSelecting, setIsAiSelecting] = useState(false);
-  const [calcPills, setCalcPills] = useState([]);
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
   const pdfDocumentRef = useRef(null);
@@ -648,8 +595,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const pageImageUrlRef = useRef("");
   const cropImageRef = useRef(null);
   const dragStartRef = useRef(null);
-  const whiteboardAreaRef = useRef(null);
-  const boardSelectionStartRef = useRef(null);
 
   const clearProblemImageUrl = useCallback(() => {
     if (!problemImageUrlRef.current) return;
@@ -1007,153 +952,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     });
   };
 
-
-
-  const startSelectionTool = (mode) => {
-    setSelectionMode(mode);
-    setBoardSelectionRect(null);
-    setHint(
-      mode === "calculate"
-        ? "Draw a blue rectangle to calculate the selected expression."
-        : "Draw a yellow rectangle to explain the selected area.",
-    );
-  };
-
-  const runSelectionAnalysis = useCallback(
-    async (selectionRect, mode, bounds) => {
-      const scene = latestSceneRef.current || getDefaultScene();
-      if (!scene.elements?.length) {
-        setHint("Draw something first, then use a selection tool.");
-        return;
-      }
-
-      setIsAiSelecting(true);
-      try {
-        const exportedCanvas = await exportToCanvas({
-          elements: scene.elements,
-          appState: scene.appState,
-          files: scene.files,
-          exportScale: WHITEBOARD_EXPORT_SCALE,
-        });
-
-        const scaleX = exportedCanvas.width / Math.max(bounds.width, 1);
-        const scaleY = exportedCanvas.height / Math.max(bounds.height, 1);
-        const cropX = Math.max(0, Math.round(selectionRect.x * scaleX));
-        const cropY = Math.max(0, Math.round(selectionRect.y * scaleY));
-        const cropWidth = Math.max(1, Math.round(selectionRect.width * scaleX));
-        const cropHeight = Math.max(1, Math.round(selectionRect.height * scaleY));
-
-        const cropCanvas = document.createElement("canvas");
-        cropCanvas.width = cropWidth;
-        cropCanvas.height = cropHeight;
-        const cropContext = cropCanvas.getContext("2d");
-        if (!cropContext) throw new Error("Unable to crop selection.");
-
-        cropContext.drawImage(
-          exportedCanvas,
-          cropX,
-          cropY,
-          cropWidth,
-          cropHeight,
-          0,
-          0,
-          cropWidth,
-          cropHeight,
-        );
-
-        const cropBlob = await new Promise((resolve) => cropCanvas.toBlob(resolve, "image/png"));
-        if (!cropBlob) throw new Error("Unable to export selected area.");
-
-        const result = await analyzeDrawing(cropBlob, {
-          assignmentId,
-          problemIndex,
-          problemImageUrl,
-          mode,
-        });
-
-        const newInsights = deriveInsightsFromAiResult(result, mode);
-        if (newInsights.length > 0) {
-          setManualInsights((previous) => [...newInsights, ...previous]);
-        }
-
-        if (mode === "calculate") {
-          const value = readCalcValueFromAiResult(result);
-          if (value) {
-            setCalcPills((previous) => [
-              ...previous,
-              {
-                id: "calc-" + Date.now(),
-                text: value,
-                leftPct: ((selectionRect.x + selectionRect.width / 2) / Math.max(bounds.width, 1)) * 100,
-                topPct: ((selectionRect.y + selectionRect.height / 2) / Math.max(bounds.height, 1)) * 100,
-              },
-            ]);
-          }
-          setHint("Calculation complete.");
-        } else {
-          setHint("Explanation ready.");
-        }
-      } catch {
-        setHint("AI selection request failed.");
-      } finally {
-        setIsAiSelecting(false);
-      }
-    },
-    [assignmentId, problemImageUrl, problemIndex],
-  );
-
-  const handleAiSelectionStart = (event) => {
-    if (!selectionMode || !whiteboardAreaRef.current) return;
-    const bounds = whiteboardAreaRef.current.getBoundingClientRect();
-    const startX = clamp(event.clientX - bounds.left, 0, bounds.width);
-    const startY = clamp(event.clientY - bounds.top, 0, bounds.height);
-
-    boardSelectionStartRef.current = { x: startX, y: startY, width: bounds.width, height: bounds.height };
-    setBoardSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
-    setIsBoardSelecting(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const handleAiSelectionMove = (event) => {
-    if (!isBoardSelecting || !boardSelectionStartRef.current || !whiteboardAreaRef.current) return;
-    const bounds = whiteboardAreaRef.current.getBoundingClientRect();
-    const nextX = clamp(event.clientX - bounds.left, 0, bounds.width);
-    const nextY = clamp(event.clientY - bounds.top, 0, bounds.height);
-    const startX = boardSelectionStartRef.current.x;
-    const startY = boardSelectionStartRef.current.y;
-
-    setBoardSelectionRect({
-      x: Math.min(startX, nextX),
-      y: Math.min(startY, nextY),
-      width: Math.abs(nextX - startX),
-      height: Math.abs(nextY - startY),
-    });
-  };
-
-  const handleAiSelectionEnd = async (event) => {
-    if (!isBoardSelecting) return;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    setIsBoardSelecting(false);
-
-    const selection = boardSelectionRect;
-    const startMeta = boardSelectionStartRef.current;
-    boardSelectionStartRef.current = null;
-
-    if (!selection || selection.width < 8 || selection.height < 8 || !startMeta) {
-      setBoardSelectionRect(null);
-      return;
-    }
-
-    const mode = selectionMode;
-    setSelectionMode(null);
-    await runSelectionAnalysis(selection, mode, {
-      width: startMeta.width,
-      height: startMeta.height,
-    });
-    setBoardSelectionRect(null);
-  };
-
-
   const handleRemoveProblemImage = async () => {
     await deleteProblemImage(assignmentId, problemIndex);
     setProblemImageMeta(null);
@@ -1190,24 +988,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         </div>
         <div className="topbar-actions">
           <p className="status-pill">{status}</p>
-          <div className="selection-tool-row" aria-label="AI selection tools">
-            <button
-              type="button"
-              className={`selection-tool-btn selection-tool-btn-blue ${selectionMode === "calculate" ? "selection-tool-btn-active" : ""}`}
-              onClick={() => startSelectionTool("calculate")}
-              disabled={isAiSelecting}
-            >
-              Calc
-            </button>
-            <button
-              type="button"
-              className={`selection-tool-btn selection-tool-btn-yellow ${selectionMode === "explain" ? "selection-tool-btn-active" : ""}`}
-              onClick={() => startSelectionTool("explain")}
-              disabled={isAiSelecting}
-            >
-              Explain
-            </button>
-          </div>
           <button type="button" onClick={handleSave}>Save Drawing</button>
           <button
             type="button"
@@ -1250,7 +1030,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       </section>
 
       <section className="whiteboard-stage">
-        <section className="canvas-area" ref={whiteboardAreaRef}>
+        <section className="canvas-area">
           <Excalidraw
             key={`${assignmentId}-${problemIndex}-${sceneRevision}`}
             initialData={initialScene}
@@ -1274,51 +1054,28 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               <MainMenu.DefaultItems.ChangeCanvasBackground />
             </MainMenu>
           </Excalidraw>
-
-          {selectionMode && (
-            <div
-              className={`ai-select-layer ai-select-layer-${selectionMode}`}
-              onPointerDown={handleAiSelectionStart}
-              onPointerMove={handleAiSelectionMove}
-              onPointerUp={handleAiSelectionEnd}
-              onPointerCancel={handleAiSelectionEnd}
-            >
-              {boardSelectionRect && (
-                <div
-                  className="ai-select-rect"
-                  style={{
-                    left: `${boardSelectionRect.x}px`,
-                    top: `${boardSelectionRect.y}px`,
-                    width: `${boardSelectionRect.width}px`,
-                    height: `${boardSelectionRect.height}px`,
-                  }}
-                />
-              )}
-            </div>
-          )}
-
-          {calcPills.map((pill) => (
-            <div
-              key={pill.id}
-              className="ai-calc-pill"
-              style={{ left: `${pill.leftPct}%`, top: `${pill.topPct}%` }}
-            >
-              {pill.text}
-            </div>
-          ))}
         </section>
 
-        <aside className="insights-rail">
-          <section className="insights-panel" aria-label="AI Study Buddy">
-            <h2>AI Study Buddy</h2>
-            <p className="subtle ai-buddy-status">{hint}</p>
+        <aside className={`insights-rail ${isInsightsOpen ? "is-open" : ""}`}>
+          <button
+            type="button"
+            className="insights-tab"
+            onClick={() => setIsInsightsOpen((current) => !current)}
+            aria-expanded={isInsightsOpen}
+            aria-controls="whiteboard-insights-panel"
+          >
+            Hints
+          </button>
+
+          <section id="whiteboard-insights-panel" className="insights-panel" aria-label="Hints and wrong steps">
+            <h2>Hints and Wrong Steps</h2>
 
             <div className="insight-group">
               <h3>Hints</h3>
               {hintInsights.length > 0 ? (
                 hintInsights.map((entry, index) => (
                   <details key={entry.id} className="insight-item insight-item-hint">
-                    <summary>{`Hint ${index + 1}`}</summary>
+                    <summary>{entry.title || `Hint ${index + 1}`}</summary>
                     <p>{entry.content}</p>
                   </details>
                 ))
@@ -1328,20 +1085,25 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
             </div>
 
             <div className="insight-group">
-              <h3>Errors</h3>
+              <h3>Wrong Steps</h3>
               {wrongInsights.length > 0 ? (
                 wrongInsights.map((entry, index) => (
                   <details key={entry.id} className="insight-item insight-item-wrong">
-                    <summary>{`Error ${index + 1}`}</summary>
+                    <summary>{entry.title || `Wrong Step ${index + 1}`}</summary>
                     <p>{entry.content}</p>
                   </details>
                 ))
               ) : (
-                <p className="subtle">No errors yet.</p>
+                <p className="subtle">No wrong steps yet.</p>
               )}
             </div>
           </section>
         </aside>
+      </section>
+
+      <section className="panel">
+        <h2>AI Study Buddy</h2>
+        <p className="subtle">{hint}</p>
       </section>
 
       <section className="panel">
@@ -1578,4 +1340,3 @@ function App() {
 }
 
 export default App;
-

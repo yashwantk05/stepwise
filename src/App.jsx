@@ -851,7 +851,23 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
 
         const nextInsights = deriveInsightsFromAiResult(result, "explain");
         if (nextInsights.length > 0) {
-          appendLimitedInsights(nextInsights);
+          setManualInsights((previous) => {
+            const merged = [...nextInsights, ...previous];
+            let hintCount = 0;
+            let errorCount = 0;
+
+            return merged.filter((entry) => {
+              if (entry.kind === "wrong") {
+                if (errorCount >= MAX_ERROR_ITEMS) return false;
+                errorCount += 1;
+                return true;
+              }
+
+              if (hintCount >= MAX_HINT_ITEMS) return false;
+              hintCount += 1;
+              return true;
+            });
+          });
         }
 
         setHint("AI feedback updated.");
@@ -859,7 +875,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         setHint("Hint service unavailable.");
       }
     },
-    [appendLimitedInsights, assignmentId, blobToBase64, problemImageUrl, problemIndex],
+    [assignmentId, blobToBase64, problemImageUrl, problemIndex],
   );
 
   const handleChange = useCallback((elements, appState, files) => {
@@ -1648,4 +1664,3 @@ function App() {
 }
 
 export default App;
-

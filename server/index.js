@@ -287,7 +287,8 @@ confidence
 Rules:
 - correctness = correct / incorrect / unclear
 - confidence = low / medium / high
-- If unreadable set observed_step="Unreadable"
+- Use observed_step="Unreadable" only when no meaningful math symbols or structure can be recognized.
+- If partially readable, include recognizable math in observed_step and set confidence="low"
             `.trim(),
           },
           createImageUrlPart(drawingBuffer, drawingMimeType),
@@ -331,10 +332,10 @@ Hint level: ${hintLevel}
 
 Hint rules:
 
-Level 1 → conceptual nudge
-Level 2 → strategy hint
-Level 3 → next step guidance
-Level 4 → near solution
+Level 1 -> conceptual nudge
+Level 2 -> strategy hint
+Level 3 -> next step guidance
+Level 4 -> near solution
 
 Behavior:
 - If correctness=correct, give the most likely next step using the context.
@@ -597,14 +598,14 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
     }
 
     const formattedContext = formatProblemContextForHint(problemContext);
-    const hint =
-      observedStep.toLowerCase() === "unreadable" || analysis.correctness === "unclear"
-        ? buildUnreadableHint(problemContext)
-        : await generateHintWithAzure({
-            problemContext: formattedContext,
-            studentAnalysis: analysis,
-            hintLevel: 1,
-          });
+    const isUnreadableStep = !observedStep || observedStep.toLowerCase() === "unreadable";
+    const hint = isUnreadableStep
+      ? buildUnreadableHint(problemContext)
+      : await generateHintWithAzure({
+          problemContext: formattedContext,
+          studentAnalysis: analysis,
+          hintLevel: 1,
+        });
 
     response.json({
       analysis,

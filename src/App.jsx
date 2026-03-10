@@ -1,3 +1,5 @@
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
@@ -136,6 +138,77 @@ const parseInsightsForProblem = (assignment, problemIndex) => {
 };
 
 
+
+const escapeHtml = (value) =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const LATEX_SEGMENT_PATTERN =
+  /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)/g;
+
+const renderMathSegment = (segment) => {
+  let expression = segment;
+  let displayMode = false;
+
+  if (segment.startsWith("$$") && segment.endsWith("$$")) {
+    expression = segment.slice(2, -2);
+    displayMode = true;
+  } else if (segment.startsWith("\\[") && segment.endsWith("\\]")) {
+    expression = segment.slice(2, -2);
+    displayMode = true;
+  } else if (segment.startsWith("\\(") && segment.endsWith("\\)")) {
+    expression = segment.slice(2, -2);
+  } else if (segment.startsWith("$") && segment.endsWith("$")) {
+    expression = segment.slice(1, -1);
+  }
+
+  try {
+    return katex.renderToString(expression.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: "ignore",
+    });
+  } catch {
+    return escapeHtml(segment);
+  }
+};
+
+const renderLatexTextToHtml = (value) => {
+  const source = String(value || "");
+  let html = "";
+  let cursor = 0;
+
+  for (const match of source.matchAll(LATEX_SEGMENT_PATTERN)) {
+    const [segment] = match;
+    const index = match.index ?? 0;
+
+    if (index > cursor) {
+      html += escapeHtml(source.slice(cursor, index)).replace(/\n/g, "<br/>");
+    }
+
+    html += renderMathSegment(segment);
+    cursor = index + segment.length;
+  }
+
+  if (cursor < source.length) {
+    html += escapeHtml(source.slice(cursor)).replace(/\n/g, "<br/>");
+  }
+
+  return html;
+};
+
+const LatexText = ({ text, as: Element = "span", className = "" }) => (
+  <Element
+    className={className}
+    dangerouslySetInnerHTML={{
+      __html: renderLatexTextToHtml(text),
+    }}
+  />
+);
 
 const deriveInsightsFromAiResult = (result, requestedMode) => {
   const entries = [];
@@ -1392,7 +1465,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
                 hintInsights.map((entry, index) => (
                   <details key={entry.id} className="insight-item insight-item-hint">
                     <summary>{`Hint ${index + 1}`}</summary>
-                    <p>{entry.content}</p>
+                    <LatexText as="p" text={entry.content} />
                   </details>
                 ))
               ) : (
@@ -1407,7 +1480,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
                     key={entry.id}
                     className={`selection-result-card selection-result-card-${entry.mode}`}
                   >
-                    {entry.cardText}
+                    <LatexText as="div" text={entry.cardText} />
                   </div>
                 ))}
               </section>
@@ -1419,7 +1492,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
                 wrongInsights.map((entry, index) => (
                   <details key={entry.id} className="insight-item insight-item-wrong">
                     <summary>{`Error ${index + 1}`}</summary>
-                    <p>{entry.content}</p>
+                    <LatexText as="p" text={entry.content} />
                   </details>
                 ))
               ) : (

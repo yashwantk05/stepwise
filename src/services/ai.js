@@ -23,7 +23,40 @@ const buildDevHeaders = () => {
   };
 };
 
-export async function analyzeDrawing(blob, { assignmentId, problemIndex } = {}) {
+const isDebugImagesEnabled = () =>
+  ["true", "1", "yes"].includes(normalizeFlag(import.meta.env.VITE_DEBUG_AI_IMAGES));
+
+const debugEchoImage = async (blob, label) => {
+  const formData = new FormData();
+  formData.append("file", blob, `${label || "debug"}.png`);
+
+  const response = await fetch(`${API_BASE}/debug/echo-image?label=${encodeURIComponent(label)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildDevHeaders(),
+    body: formData,
+  });
+
+  // Intentionally ignore the body; the goal is a DevTools Network entry with an image Preview.
+  if (!response.ok) {
+    throw new Error("Debug echo failed.");
+  }
+};
+
+export async function analyzeDrawing(
+  blob,
+  { assignmentId, problemIndex, problemImageUrl } = {},
+) {
+  if (isDebugImagesEnabled()) {
+    void debugEchoImage(blob, "whiteboard").catch(() => {});
+    if (problemImageUrl) {
+      void fetch(problemImageUrl)
+        .then((response) => response.blob())
+        .then((problemBlob) => debugEchoImage(problemBlob, "problem"))
+        .catch(() => {});
+    }
+  }
+
   const formData = new FormData();
   formData.append("file", blob, "drawing.png");
   if (assignmentId) {
@@ -34,6 +67,7 @@ export async function analyzeDrawing(blob, { assignmentId, problemIndex } = {}) 
   }
 
   const endpoint = import.meta.env.VITE_AI_ANALYZE_URL || `${API_BASE}/ai/analyze`;
+
   const response = await fetch(endpoint, {
     method: "POST",
     credentials: "include",

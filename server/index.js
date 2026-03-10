@@ -106,6 +106,88 @@ const createImageUrlPart = (buffer, mimeType = "image/png") => ({
 });
 
 const sha256 = (buffer) => createHash("sha256").update(buffer).digest("hex");
+const readPngDimensions = (buffer) => {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null;
+  const signature = buffer.subarray(0, 8);
+  const pngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  if (!signature.equals(pngSignature)) return null;
+  try {
+    return {
+      width: buffer.readUInt32BE(16),
+      height: buffer.readUInt32BE(20),
+    };
+  } catch {
+    return null;
+  }
+};
+const safeJsonParse = (value) => {
+  if (typeof value !== "string") return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const sanitizeHint = (hint) => {
+  const text = String(hint || "").trim();
+
+  if (!text) {
+    return "Try rewriting your latest step clearly.";
+  }
+
+  if (text.length > 300) {
+    return text.slice(0, 300);
+  }
+
+  return text;
+};
+
+const formatProblemContextForHint = (rawContext) => {
+  const parsed =
+    rawContext && typeof rawContext === "object" && !Array.isArray(rawContext)
+      ? rawContext
+      : safeJsonParse(rawContext);
+
+  if (!parsed) {
+    return rawContext ? String(rawContext).trim() : "";
+  }
+
+  const lines = [];
+  if (parsed.summary) lines.push(`Summary: ${parsed.summary}`);
+  if (parsed.goal) lines.push(`Goal: ${parsed.goal}`);
+  if (parsed.concepts) {
+    const concepts = Array.isArray(parsed.concepts) ? parsed.concepts : [parsed.concepts];
+    lines.push(`Concepts: ${concepts.filter(Boolean).join("; ")}`);
+  }
+  if (parsed.canonical_steps) {
+    const steps = Array.isArray(parsed.canonical_steps)
+      ? parsed.canonical_steps
+      : [parsed.canonical_steps];
+    lines.push(`Canonical steps: ${steps.filter(Boolean).join(" | ")}`);
+  }
+  if (parsed.common_mistakes) {
+    const mistakes = Array.isArray(parsed.common_mistakes)
+      ? parsed.common_mistakes
+      : [parsed.common_mistakes];
+    lines.push(`Common mistakes: ${mistakes.filter(Boolean).join(" | ")}`);
+  }
+  if (parsed.final_answer) lines.push(`Final answer: ${parsed.final_answer}`);
+
+  return lines.join("\n");
+};
+
+const buildUnreadableHint = (rawContext) => {
+  const parsed =
+    rawContext && typeof rawContext === "object" && !Array.isArray(rawContext)
+      ? rawContext
+      : safeJsonParse(rawContext);
+  const goal = parsed?.goal ? String(parsed.goal).trim() : "";
+  if (goal) {
+    return `I couldn't read the step. Please rewrite it clearly and show how it moves toward: ${goal}.`;
+  }
+  return "I couldn't read the step. Please rewrite it clearly and show the full equation or expression.";
+};
 
 const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperature = 0.3 }) => {
   const { endpoint, apiKey, apiVersion, deployment } = getAzureConfig();
@@ -140,8 +222,8 @@ const analyzeProblemContextWithAzure = async (
   answerKey = "",
 ) =>
   requestAzureChatCompletion({
-    maxTokens: 350,
-    temperature: 0.2,
+    maxTokens: 500,
+    temperature: 0.1,
     messages: [
       {
         role: "user",
@@ -149,40 +231,24 @@ const analyzeProblemContextWithAzure = async (
           {
             type: "text",
             text: `
-You are solving a math problem from the provided image before tutoring begins.
+Analyze this math problem and return structured tutoring metadata.
 
-Tasks:
-1. Read the problem carefully.
-2. Solve it fully.
-3. Produce reusable tutoring context for future hints.
+Answer key (may be incorrect):
+${answerKey || "None"}
 
-Provided answer key:
-${answerKey || "No answer key is available."}
+Return JSON only with fields:
 
-Return exactly these sections:
-Problem:
-<one sentence summary>
-
-Goal:
-<what the student must find or prove>
-
-Solved answer:
-<final answer>
-
-Key steps:
-1. <step>
-2. <step>
-3. <step>
-
-Pitfalls:
-1. <pitfall>
-2. <pitfall>
+summary
+goal
+concepts
+final_answer
+canonical_steps
+common_mistakes
 
 Rules:
-- Be concise and precise.
-- If an answer key is available, verify your solved answer against it.
-- If text is unclear, say what you infer.
-- ALL mathematical expressions MUST be written in LaTeX using $...$.
+- Be concise.
+- Do not include explanations.
+- Do not include tutoring instructions.
             `.trim(),
           },
           createImageUrlPart(buffer, mimeType),
@@ -190,101 +256,97 @@ Rules:
       },
     ],
   });
-
-const analyzeDrawingWithAzure = async ({
+  
+const interpretStudentStepWithAzure = async ({
   drawingBuffer,
   drawingMimeType = "image/png",
-  problemBuffer = null,
-  problemMimeType = "image/png",
   problemContext = "",
-  answerKey = "",
 }) => {
-  const content = [
-    {
-      type: "text",
-      text: `
-You are a strict math tutor checking a student's handwritten solution.
-
-Stored problem context:
-${problemContext || "No stored problem context is available."}
-
-Answer key:
-${answerKey || "No answer key is available."}
-
-Tasks:
-1. Read the drawing image and extract the latest visible student line.
-2. Compare that latest line against the stored problem context and expected solution path.
-3. If an answer key is available, validate your reasoning against it before answering.
-4. Verify whether the latest visible step is valid.
-5. If incorrect, explain the mistake briefly.
-6. Provide the best next hint, not the full solution.
-
-Rules:
-- Anchor your hint to the latest visible student step in the drawing.
-- Do not restart from step 1 if any valid intermediate student work is visible.
-- Only provide first-step guidance when the board is blank or unreadable.
-- If "Observed student step" is "Unreadable", do not invent equations or numbers.
-- If "Observed student step" is "Unreadable", the "Correct next line" must be exactly "Not enough work shown yet."
-- Prefer a minimal next-step hint.
-- Never assume the student is correct.
-- If the drawing is too incomplete, say what to do next.
-- Explanations must be short (max 2 sentences).
-- ALL mathematical expressions MUST be written in LaTeX using $...$.
-
-Format:
-Observed student step:
-<verbatim or best-effort reading of latest line; "Unreadable" if unclear>
-
-Hint:
-<short hint>
-
-Correct next line:
-<next mathematical line or "Not enough work shown yet.">
-      `.trim(),
-    },
-  ];
-
-  if (problemBuffer) {
-    content.push({
-      type: "text",
-      text: "Reference problem image:",
-    });
-    content.push(createImageUrlPart(problemBuffer, problemMimeType));
-  }
-
-  content.push({
-    type: "text",
-    text: "Student whiteboard image:",
-  });
-  content.push(createImageUrlPart(drawingBuffer, drawingMimeType));
-
   return requestAzureChatCompletion({
+    temperature: 0.2,
+    maxTokens: 200,
     messages: [
       {
         role: "user",
-        content,
+        content: [
+          {
+            type: "text",
+            text: `
+You are reading a student's handwritten math step.
+
+Problem context:
+${problemContext}
+
+Return JSON with fields:
+
+observed_step
+stage
+correctness
+confidence
+
+Rules:
+- correctness = correct / incorrect / unclear
+- confidence = low / medium / high
+- If unreadable set observed_step="Unreadable"
+            `.trim(),
+          },
+          createImageUrlPart(drawingBuffer, drawingMimeType),
+        ],
       },
     ],
   });
 };
 
-const enforceHintOutputGuards = (text) => {
-  const raw = String(text || "").trim();
-  if (!raw) return "No hint available yet.";
+const generateHintWithAzure = async ({
+  problemContext,
+  studentAnalysis,
+  hintLevel = 1,
+}) => {
+  const analysis =
+    studentAnalysis && typeof studentAnalysis === "object"
+      ? studentAnalysis
+      : safeJsonParse(studentAnalysis) || {};
+  const observedStep = String(analysis.observed_step || "");
+  const correctness = String(analysis.correctness || "unclear").toLowerCase();
+  const confidence = String(analysis.confidence || "").toLowerCase();
 
-  const unreadable = /Observed student step:\s*Unreadable/i.test(raw);
-  if (!unreadable) return raw;
+  return requestAzureChatCompletion({
+    temperature: 0.4,
+    maxTokens: 200,
+    messages: [
+      {
+        role: "user",
+        content: `
+You are a math tutor giving subtle hints.
 
-  return [
-    "Observed student step:",
-    "Unreadable",
-    "",
-    "Hint:",
-    "The latest line is unclear. Rewrite the most recent equation clearly so I can validate it and give the exact next step.",
-    "",
-    "Correct next line:",
-    "Not enough work shown yet.",
-  ].join("\n");
+Problem context:
+${problemContext}
+
+Student analysis:
+Observed step: ${observedStep || "Unknown"}
+Correctness: ${correctness || "unclear"}
+Confidence: ${confidence || "unknown"}
+
+Hint level: ${hintLevel}
+
+Hint rules:
+
+Level 1 → conceptual nudge
+Level 2 → strategy hint
+Level 3 → next step guidance
+Level 4 → near solution
+
+Behavior:
+- If correctness=correct, give the most likely next step using the context.
+- If correctness=incorrect, point out the likely error and give a targeted hint to fix it.
+- If correctness=unclear or observed_step is "Unreadable", ask for a clearer rewrite and give one specific thing to clarify.
+- Avoid generic advice if context is available.
+Never reveal the final answer unless hint level is 4.
+Maximum 2 sentences. Use LaTeX for equations.
+        `,
+      },
+    ],
+  });
 };
 
 const getOrigin = (request) => {
@@ -445,9 +507,39 @@ app.get("/api/health", (_request, response) => {
   response.json({ status: "ok", service: "stepwise-api" });
 });
 
+const isDebugRoutesEnabled = () => {
+  const flag = readEnv("STEPWISE_DEBUG_ROUTES").toLowerCase();
+  return flag === "true" || flag === "1" || flag === "yes";
+};
+
+app.post("/api/debug/echo-image", requireAuth, upload.single("file"), (request, response) => {
+  if (!isDebugRoutesEnabled()) {
+    response.status(404).json({ message: "Not found." });
+    return;
+  }
+
+  const file = request.file;
+  if (!file) {
+    response.status(400).json({ message: "Image file is required." });
+    return;
+  }
+
+  const label = String(request.query?.label || "debug")
+    .trim()
+    .replace(/[^\w.-]+/g, "-")
+    .slice(0, 48);
+  const mimeType = file.mimetype || "application/octet-stream";
+  const extension = mimeType === "image/png" ? "png" : mimeType === "image/jpeg" ? "jpg" : "bin";
+
+  response.setHeader("Content-Type", mimeType);
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Content-Disposition", `inline; filename="${label}.${extension}"`);
+  response.send(file.buffer);
+});
+
 app.use(express.json({ limit: "2mb" }));
 
-app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, response) => {
+app.post("/api/ai/analyze", requireDb, requireAuth, upload.single("file"), async (request, response) => {
   const file = request.file;
   if (!file) {
     response.status(400).json({ message: "Drawing image is required." });
@@ -470,6 +562,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         getProblemImage(request.user.id, assignmentId, problemIndex),
       ]);
       problemContext = contextRecord?.content || "";
+      console.log("problemContext:", JSON.stringify(problemContext));
       answerKey = contextRecord?.answerKey || "";
 
       if (imageRecord?.blobName) {
@@ -481,37 +574,65 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       }
     }
 
-    const result = await analyzeDrawingWithAzure({
+    const analysisRaw = await interpretStudentStepWithAzure({
       drawingBuffer: file.buffer,
       drawingMimeType: file.mimetype || "image/png",
-      problemBuffer,
-      problemMimeType,
       problemContext,
-      answerKey,
     });
+
+    let analysis;
+    try {
+      const cleaned = analysisRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+      analysis = JSON.parse(cleaned);
+    } catch {
+      analysis = { observed_step: "Unreadable" };
+    }
+    const observedStep = String(analysis?.observed_step || "");
+    const normalizedCorrectness = String(analysis?.correctness || "").toLowerCase();
+    const normalizedConfidence = String(analysis?.confidence || "").toLowerCase();
+    if (!normalizedCorrectness) {
+      analysis.correctness = observedStep.toLowerCase() === "unreadable" ? "unclear" : "unclear";
+    }
+    if (!normalizedConfidence) {
+      analysis.confidence = "low";
+    }
+
+    const formattedContext = formatProblemContextForHint(problemContext);
+    const hint =
+      observedStep.toLowerCase() === "unreadable" || analysis.correctness === "unclear"
+        ? buildUnreadableHint(problemContext)
+        : await generateHintWithAzure({
+            problemContext: formattedContext,
+            studentAnalysis: analysis,
+            hintLevel: 1,
+          });
+
     response.json({
-      result: enforceHintOutputGuards(result),
+      analysis,
+      hint: sanitizeHint(hint),
       debug: {
         drawingImage: {
           bytes: file.buffer.length,
           sha256: sha256(file.buffer),
           mimeType: file.mimetype || "image/png",
+          dimensions: readPngDimensions(file.buffer),
         },
         problemImage: problemBuffer
           ? {
               bytes: problemBuffer.length,
               sha256: sha256(problemBuffer),
               mimeType: problemMimeType,
+              dimensions: readPngDimensions(problemBuffer),
             }
           : null,
         problemContextChars: problemContext.length,
         answerKeyChars: answerKey.length,
       },
     });
-  } catch (error) {
-    console.error("AI analyze failed:", error.message);
-    response.status(503).json({ result: "AI tutor temporarily unavailable." });
-  }
+    } catch (error) {
+      console.error("AI analyze failed:", error.message);
+      response.status(503).json({ result: "AI tutor temporarily unavailable." });
+    }
 });
 
 app.get("/api/auth/google/login", (request, response) => {
@@ -967,16 +1088,25 @@ app.put(
     );
 
     try {
-      const generatedContext = await analyzeProblemContextWithAzure(
+      const raw = await analyzeProblemContextWithAzure(
         file.buffer,
         file.mimetype || "image/png",
         existingContextRecord?.answerKey || "",
       );
+
+      let parsed;
+      try {
+        const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+        parsed = JSON.parse(cleaned);
+      } catch {
+        parsed = { summary: "Failed to parse context" };
+      }
+
       await upsertProblemContext(
         request.user.id,
         request.params.id,
         problemIndex,
-        generatedContext,
+        JSON.stringify(parsed),
         existingContextRecord?.answerKey || null,
       );
     } catch (error) {

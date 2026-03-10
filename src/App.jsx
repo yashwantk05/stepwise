@@ -1069,49 +1069,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
           </Excalidraw>
         </section>
 
-        <aside className={`insights-rail ${isInsightsOpen ? "is-open" : ""}`}>
-          <button
-            type="button"
-            className="insights-tab"
-            onClick={() => setIsInsightsOpen((current) => !current)}
-            aria-expanded={isInsightsOpen}
-            aria-controls="whiteboard-insights-panel"
-          >
-            Hints
-          </button>
-
-          <section id="whiteboard-insights-panel" className="insights-panel" aria-label="Hints and wrong steps">
-            <h2>Hints and Wrong Steps</h2>
-
-            <div className="insight-group">
-              <h3>Hints</h3>
-              {hintInsights.length > 0 ? (
-                hintInsights.map((entry, index) => (
-                  <details key={entry.id} className="insight-item insight-item-hint">
-                    <summary>{entry.title || `Hint ${index + 1}`}</summary>
-                    <p>{entry.content}</p>
-                  </details>
-                ))
-              ) : (
-                <p className="subtle">No hints yet.</p>
-              )}
-            </div>
-
-            <div className="insight-group">
-              <h3>Wrong Steps</h3>
-              {wrongInsights.length > 0 ? (
-                wrongInsights.map((entry, index) => (
-                  <details key={entry.id} className="insight-item insight-item-wrong">
-                    <summary>{entry.title || `Wrong Step ${index + 1}`}</summary>
-                    <p>{entry.content}</p>
-                  </details>
-                ))
-              ) : (
-                <p className="subtle">No wrong steps yet.</p>
-              )}
-            </div>
-          </section>
-        </aside>
+     
       </section>
 
       <section className="panel">

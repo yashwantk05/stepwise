@@ -179,6 +179,11 @@ const readCalcValueFromAiResult = (result) => {
   return String(raw || "").trim();
 };
 
+const readExplainTextFromAiResult = (result) => {
+  const raw = result?.explanation || result?.hint || result?.message || result?.result || "";
+  return String(raw || "").trim();
+};
+
 const getPersistedScene = (scene) => {
   const normalizedElements = Array.isArray(scene?.elements) ? scene.elements : [];
   const normalizedFiles =
@@ -601,7 +606,7 @@ function AssignmentDetailPage({ assignmentId, navigate }) {
 function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [assignment, setAssignment] = useState(null);
   const [status, setStatus] = useState("Loading whiteboard...");
-  const [hint, setHint] = useState("Start drawing to receive hints.");
+  const [, setHint] = useState("Start drawing to receive hints.");
   const [initialScene, setInitialScene] = useState(getDefaultScene());
   const latestSceneRef = useRef(getDefaultScene());
   const insights = useMemo(
@@ -641,6 +646,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [isBoardSelecting, setIsBoardSelecting] = useState(false);
   const [isAiSelecting, setIsAiSelecting] = useState(false);
   const [calcPills, setCalcPills] = useState([]);
+  const [selectionResults, setSelectionResults] = useState([]);
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
   const pdfDocumentRef = useRef(null);
@@ -838,8 +844,13 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
           problemIndex,
           problemImageUrl,
         });
-        const nextHint = typeof result?.hint === "string" ? result.hint.trim() : "";
-        setHint(nextHint || "No hint available yet.");
+
+        const nextInsights = deriveInsightsFromAiResult(result, "explain");
+        if (nextInsights.length > 0) {
+          setManualInsights((previous) => [...nextInsights, ...previous]);
+        }
+
+        setHint("AI feedback updated.");
       } catch {
         setHint("Hint service unavailable.");
       }
@@ -1076,21 +1087,42 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
           setManualInsights((previous) => [...newInsights, ...previous]);
         }
 
+        const selectionLeftPct =
+          ((selectionRect.x + selectionRect.width / 2) / Math.max(bounds.width, 1)) * 100;
+        const selectionTopPct =
+          ((selectionRect.y + selectionRect.height / 2) / Math.max(bounds.height, 1)) * 100;
+
         if (mode === "calculate") {
           const value = readCalcValueFromAiResult(result);
           if (value) {
-            setCalcPills((previous) => [
-              ...previous,
+            setSelectionResults((previous) => [
               {
-                id: "calc-" + Date.now(),
-                text: value,
-                leftPct: ((selectionRect.x + selectionRect.width / 2) / Math.max(bounds.width, 1)) * 100,
-                topPct: ((selectionRect.y + selectionRect.height / 2) / Math.max(bounds.height, 1)) * 100,
+                id: "result-" + Date.now(),
+                mode: "calculate",
+                cardText: `Your calculated result is ${value}`,
+                boardText: value,
+                leftPct: selectionLeftPct,
+                topPct: selectionTopPct,
               },
+              ...previous,
             ]);
           }
           setHint("Calculation complete.");
         } else {
+          const explanation = readExplainTextFromAiResult(result);
+          if (explanation) {
+            setSelectionResults((previous) => [
+              {
+                id: "result-" + Date.now(),
+                mode: "explain",
+                cardText: explanation,
+                boardText: explanation,
+                leftPct: selectionLeftPct,
+                topPct: selectionTopPct,
+              },
+              ...previous,
+            ]);
+          }
           setHint("Explanation ready.");
         }
       } catch {
@@ -1153,6 +1185,24 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
     setBoardSelectionRect(null);
   };
 
+
+  const handleSelectionResultClick = (resultId) => {
+    const selectedResult = selectionResults.find((entry) => entry.id === resultId);
+    if (!selectedResult) return;
+
+    setCalcPills((previous) => [
+      ...previous,
+      {
+        id: "placed-" + Date.now(),
+        text: selectedResult.boardText,
+        leftPct: selectedResult.leftPct,
+        topPct: selectedResult.topPct,
+        mode: selectedResult.mode,
+      },
+    ]);
+
+    setSelectionResults((previous) => previous.filter((entry) => entry.id !== resultId));
+  };
 
   const handleRemoveProblemImage = async () => {
     await deleteProblemImage(assignmentId, problemIndex);
@@ -1300,7 +1350,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
           {calcPills.map((pill) => (
             <div
               key={pill.id}
-              className="ai-calc-pill"
+              className={`ai-calc-pill ${pill.mode === "explain" ? "ai-calc-pill-explain" : "ai-calc-pill-calculate"}`}
               style={{ left: `${pill.leftPct}%`, top: `${pill.topPct}%` }}
             >
               {pill.text}
@@ -1311,7 +1361,6 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         <aside className="insights-rail">
           <section className="insights-panel" aria-label="AI Study Buddy">
             <h2>AI Study Buddy</h2>
-            <p className="subtle ai-buddy-status">{hint}</p>
 
             <div className="insight-group">
               <h3>Hints</h3>
@@ -1341,6 +1390,21 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               )}
             </div>
           </section>
+
+          {selectionResults.length > 0 && (
+            <section className="selection-results" aria-label="Selection results">
+              {selectionResults.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={`selection-result-card selection-result-card-${entry.mode}`}
+                  onClick={() => handleSelectionResultClick(entry.id)}
+                >
+                  {entry.cardText}
+                </button>
+              ))}
+            </section>
+          )}
         </aside>
       </section>
 

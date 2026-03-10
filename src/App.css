@@ -277,14 +277,25 @@ button.outline {
   position: absolute;
   z-index: 9;
   transform: translate(-50%, -50%);
+  border-radius: 12px;
+  padding: 8px 10px;
+  font-weight: 700;
+  pointer-events: none;
+  max-width: min(320px, 45vw);
+  white-space: normal;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.24);
+}
+
+.ai-calc-pill-calculate {
   background: #2563eb;
   color: #ffffff;
   border: 2px solid #1e3a8a;
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-weight: 700;
-  pointer-events: none;
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3);
+}
+
+.ai-calc-pill-explain {
+  background: #fde047;
+  color: #3f2f00;
+  border: 2px solid #a16207;
 }
 .whiteboard-stage {
   display: grid;
@@ -394,6 +405,31 @@ button.outline {
 
 .ai-buddy-status {
   font-size: 0.92rem;
+}
+
+.selection-results {
+  display: grid;
+  gap: 10px;
+}
+
+.selection-result-card {
+  width: 100%;
+  border: 2px solid #0f172a;
+  border-radius: 10px;
+  padding: 12px;
+  text-align: left;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.selection-result-card-calculate {
+  background: #22d3ee;
+  color: #083344;
+}
+
+.selection-result-card-explain {
+  background: #fde047;
+  color: #3f2f00;
 }
 .problem-image-preview {
   width: min(100%, 900px);

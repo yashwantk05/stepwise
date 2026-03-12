@@ -252,6 +252,10 @@ const readCalcValueFromAiResult = (result) => {
   return String(raw || "").trim();
 };
 
+const readCalcMessageFromAiResult = (result) => {
+  return String(result?.message || "").trim();
+};
+
 const readExplainTextFromAiResult = (result) => {
   const raw = result?.explanation || result?.hint || result?.message || result?.result || "";
   return String(raw || "").trim();
@@ -285,8 +289,31 @@ const PDF_MAX_WIDTH = 2400;
 const PROBLEM_CROP_SCALE = 2;
 const MAX_HINT_ITEMS = 3;
 const MAX_ERROR_ITEMS = 3;
-const MAX_CALCULATE_RESULTS = 2;
+const MAX_CALCULATE_RESULTS = 1;
 const MAX_EXPLAIN_RESULTS = 1;
+
+const mergeLimitedInsights = (previous, incoming) => {
+  const merged = [...previous, ...incoming];
+  let hintCount = 0;
+  let errorCount = 0;
+  const retainedIndexes = new Set();
+
+  for (let index = merged.length - 1; index >= 0; index -= 1) {
+    const entry = merged[index];
+    if (entry.kind === "wrong") {
+      if (errorCount >= MAX_ERROR_ITEMS) continue;
+      errorCount += 1;
+      retainedIndexes.add(index);
+      continue;
+    }
+
+    if (hintCount >= MAX_HINT_ITEMS) continue;
+    hintCount += 1;
+    retainedIndexes.add(index);
+  }
+
+  return merged.filter((_, index) => retainedIndexes.has(index));
+};
 const normalizeProblemCount = (value) => {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) return MIN_PROBLEM_COUNT;
@@ -294,6 +321,24 @@ const normalizeProblemCount = (value) => {
 };
 const buildProblemIndexes = (problemCount) =>
   Array.from({ length: normalizeProblemCount(problemCount) }, (_value, index) => index + 1);
+
+const upscaleCanvasToMinDimension = (canvas, minDimension = WHITEBOARD_MIN_DIMENSION) => {
+  const maxDimension = Math.max(canvas.width, canvas.height);
+  if (!maxDimension || maxDimension >= minDimension) return canvas;
+
+  const scale = minDimension / maxDimension;
+  if (scale <= 1) return canvas;
+
+  const scaledCanvas = document.createElement("canvas");
+  scaledCanvas.width = Math.round(canvas.width * scale);
+  scaledCanvas.height = Math.round(canvas.height * scale);
+  const context = scaledCanvas.getContext("2d");
+  if (!context) return canvas;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+  return scaledCanvas;
+};
 
 const createCroppedImageBlob = async (sourceUrl, cropArea) => {
   const image = await new Promise((resolve, reject) => {
@@ -692,15 +737,15 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   );
   const [manualInsights, setManualInsights] = useState([]);
   const combinedInsights = useMemo(
-    () => [...manualInsights, ...insights],
-    [manualInsights, insights],
+    () => [...insights, ...manualInsights],
+    [insights, manualInsights],
   );
   const hintInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "hint").slice(0, MAX_HINT_ITEMS),
+    () => combinedInsights.filter((entry) => entry.kind === "hint").slice(-MAX_HINT_ITEMS),
     [combinedInsights],
   );
   const wrongInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "wrong").slice(0, MAX_ERROR_ITEMS),
+    () => combinedInsights.filter((entry) => entry.kind === "wrong").slice(-MAX_ERROR_ITEMS),
     [combinedInsights],
   );
   const [sceneRevision, setSceneRevision] = useState(0);
@@ -733,6 +778,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const dragStartRef = useRef(null);
   const whiteboardAreaRef = useRef(null);
   const boardSelectionStartRef = useRef(null);
+  const hintLevelRef = useRef(1);
+  const previousHintsRef = useRef([]);
 
   const clearProblemImageUrl = useCallback(() => {
     if (!problemImageUrlRef.current) return;
@@ -839,6 +886,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         latestSceneRef.current = getDefaultScene();
         setHint("Start drawing to receive hints.");
         lastSnapshotRef.current = null;
+        hintLevelRef.current = 1;       
+        previousHintsRef.current = [];  
         setStatus(`Problem ${problemIndex} does not exist in this assignment.`);
         setProblemImageMeta(null);
         clearProblemImageUrl();
@@ -853,6 +902,8 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
       latestSceneRef.current = scene;
       setHint("Start drawing to receive hints.");
       lastSnapshotRef.current = null;
+      hintLevelRef.current = 1;   
+      previousHintsRef.current = [];  
       setStatus(
         storedScene
           ? `Last saved ${formatDate(storedScene.updatedAt)}.`
@@ -888,24 +939,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
         exportScale: WHITEBOARD_EXPORT_SCALE,
       });
 
-      const exportCanvas = (() => {
-        const maxDimension = Math.max(canvas.width, canvas.height);
-        if (!maxDimension) return canvas;
-        if (maxDimension >= WHITEBOARD_MIN_DIMENSION) return canvas;
-
-        const scale = WHITEBOARD_MIN_DIMENSION / maxDimension;
-        if (scale <= 1) return canvas;
-
-        const scaledCanvas = document.createElement("canvas");
-        scaledCanvas.width = Math.round(canvas.width * scale);
-        scaledCanvas.height = Math.round(canvas.height * scale);
-        const context = scaledCanvas.getContext("2d");
-        if (!context) return canvas;
-        context.imageSmoothingEnabled = true;
-        context.imageSmoothingQuality = "high";
-        context.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
-        return scaledCanvas;
-      })();
+      const exportCanvas = upscaleCanvasToMinDimension(canvas);
 
       const blob = await new Promise((resolve) => exportCanvas.toBlob(resolve, "image/png"));
       if (!blob) return;
@@ -920,27 +954,20 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
           assignmentId,
           problemIndex,
           problemImageUrl,
+          hintLevel: hintLevelRef.current,
+          previousHints: previousHintsRef.current,
         });
 
         const nextInsights = deriveInsightsFromAiResult(result, "explain");
+        const newHintTexts = nextInsights
+          .filter((e) => e.kind === "hint")
+          .map((e) => e.content);
+        if (newHintTexts.length > 0) {
+          previousHintsRef.current = [...previousHintsRef.current, ...newHintTexts].slice(-5);
+          hintLevelRef.current = Math.min(4, hintLevelRef.current + 1);
+        }
         if (nextInsights.length > 0) {
-          setManualInsights((previous) => {
-            const merged = [...nextInsights, ...previous];
-            let hintCount = 0;
-            let errorCount = 0;
-
-            return merged.filter((entry) => {
-              if (entry.kind === "wrong") {
-                if (errorCount >= MAX_ERROR_ITEMS) return false;
-                errorCount += 1;
-                return true;
-              }
-
-              if (hintCount >= MAX_HINT_ITEMS) return false;
-              hintCount += 1;
-              return true;
-            });
-          });
+          setManualInsights((previous) => mergeLimitedInsights(previous, nextInsights));
         }
 
         setHint("AI feedback updated.");
@@ -1112,23 +1139,7 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   };
 
   const appendLimitedInsights = useCallback((incomingInsights) => {
-    setManualInsights((previous) => {
-      const merged = [...incomingInsights, ...previous];
-      let hintCount = 0;
-      let errorCount = 0;
-
-      return merged.filter((entry) => {
-        if (entry.kind === "wrong") {
-          if (errorCount >= MAX_ERROR_ITEMS) return false;
-          errorCount += 1;
-          return true;
-        }
-
-        if (hintCount >= MAX_HINT_ITEMS) return false;
-        hintCount += 1;
-        return true;
-      });
-    });
+    setManualInsights((previous) => mergeLimitedInsights(previous, incomingInsights));
   }, []);
 
   const appendLimitedSelectionResult = useCallback((incomingResult) => {
@@ -1207,7 +1218,10 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
           cropHeight,
         );
 
-        const cropBlob = await new Promise((resolve) => cropCanvas.toBlob(resolve, "image/png"));
+        const exportCropCanvas = upscaleCanvasToMinDimension(cropCanvas);
+        const cropBlob = await new Promise((resolve) =>
+          exportCropCanvas.toBlob(resolve, "image/png"),
+        );
         if (!cropBlob) throw new Error("Unable to export selected area.");
 
         const result = await analyzeDrawing(cropBlob, {
@@ -1230,6 +1244,15 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               mode: "calculate",
               cardText: `Your calculated result is ${value}`,
             });
+          } else {
+            const message = readCalcMessageFromAiResult(result);
+            if (message) {
+              appendLimitedSelectionResult({
+                id: "result-" + Date.now(),
+                mode: "calculate",
+                cardText: message,
+              });
+            }
           }
           setHint("Calculation complete.");
         } else {

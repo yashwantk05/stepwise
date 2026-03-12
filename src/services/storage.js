@@ -43,6 +43,25 @@ const buildUserHeaders = () =>
       }
     : {};
 
+const isDebugImagesEnabled = () =>
+  ["true", "1", "yes"].includes(normalizeFlag(import.meta.env.VITE_DEBUG_AI_IMAGES));
+
+const debugEchoImage = async (blob, label) => {
+  const formData = new FormData();
+  formData.append("file", blob, `${label || "debug"}.png`);
+
+  const response = await fetch(`${API_BASE}/debug/echo-image?label=${encodeURIComponent(label)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildUserHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error("Debug echo failed.");
+  }
+};
+
 const request = async (path, options = {}) => {
   const response = await fetch(toUrl(path), {
     credentials: "include",
@@ -249,6 +268,11 @@ export const getProblemImage = async (assignmentId, problemIndex) =>
   );
 
 export const saveProblemImage = async (assignmentId, problemIndex, file) => {
+  if (isDebugImagesEnabled()) {
+    const label = `gpt-problem-context-source-problem-${problemIndex}`;
+    void debugEchoImage(file, label).catch(() => {});
+  }
+
   const formData = new FormData();
   formData.append("file", file);
   return request(

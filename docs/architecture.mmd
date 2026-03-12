@@ -1,0 +1,67 @@
+%% StepWise architecture (high-level)
+%% View with any Mermaid renderer (GitHub, VS Code Mermaid, etc.)
+
+flowchart LR
+  user["User (Browser)"]
+
+  subgraph fe["Frontend (Vite + React)"]
+    ui["UI pages\n(assignments, whiteboard)"]
+    exc["Excalidraw canvas"]
+    export["Export snapshot\n(exportToCanvas -> PNG)"]
+  end
+
+  subgraph be["Backend (Node.js + Express)"]
+    api["REST API\n/api/*"]
+    auth["Auth middleware\n(requireAuth)"]
+    ai["AI endpoints\n/api/ai/analyze"]
+    debugEcho["Debug image echo\n/api/debug/echo-image\n(optional)"]
+  end
+
+  subgraph data["Data stores"]
+    pg["Postgres\n(assignments, metadata)"]
+    blob["Blob storage\n(PDF, scenes, images)"]
+  end
+
+  subgraph ext["External services"]
+    azure["Azure OpenAI\n(chat completions)"]
+  end
+
+  user --> ui
+  ui --> exc
+  exc --> export
+
+  ui -->|"fetch() JSON/file uploads"| api
+  export -->|"PNG snapshot upload"| ai
+
+  api --> auth
+  auth --> ai
+  auth --> debugEcho
+
+  api --> pg
+  api --> blob
+  ai --> azure
+
+  blob -->|"download problem image\n(PNG)"| ai
+  pg -->|"problem context\n(answerKey, metadata)"| ai
+
+---
+
+sequenceDiagram
+  autonumber
+  participant U as "User"
+  participant FE as "Frontend (React)"
+  participant EX as "Excalidraw"
+  participant API as "Backend (Express)"
+  participant DB as "Postgres/Blob"
+  participant AOAI as "Azure OpenAI"
+
+  U->>EX: Draws on canvas
+  EX->>FE: onChange(elements, appState, files)
+  FE->>FE: Debounce (inactivity timer)
+  FE->>FE: exportToCanvas(...) -> PNG
+  FE->>API: POST /api/ai/analyze (multipart: file=drawing.png)
+  API->>DB: Fetch problem context + image (optional)
+  API->>AOAI: Chat completion (image + prompt)
+  AOAI-->>API: JSON-ish analysis text
+  API-->>FE: { analysis, hint, debug }
+  FE-->>U: Shows hint + status

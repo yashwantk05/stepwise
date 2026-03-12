@@ -302,6 +302,7 @@ const generateHintWithAzure = async ({
   problemContext,
   studentAnalysis,
   hintLevel = 1,
+  previousHints = [],
 }) => {
   const analysis =
     studentAnalysis && typeof studentAnalysis === "object"
@@ -310,6 +311,10 @@ const generateHintWithAzure = async ({
   const observedStep = String(analysis.observed_step || "");
   const correctness = String(analysis.correctness || "unclear").toLowerCase();
   const confidence = String(analysis.confidence || "").toLowerCase();
+
+  const previousHintsSection = previousHints.length > 0
+    ? `\nPrevious hints already given (do not repeat these):\n${previousHints.map((h, i) => `${i + 1}. ${h}`).join("\n")}`
+    : "";
 
   return requestAzureChatCompletion({
     temperature: 0.4,
@@ -348,6 +353,65 @@ Maximum 2 sentences. Use LaTeX for equations.
       },
     ],
   });
+};
+
+const calculateSelectionWithAzure = async ({
+  drawingBuffer,
+  drawingMimeType = "image/png",
+  problemContext = "",
+}) => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0,
+    maxTokens: 220,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `
+Read the selected handwritten math expression in this image and calculate it.
+
+Problem context:
+${problemContext || "None"}
+
+Return JSON only with these fields:
+- expression: the expression you read from the image as a string
+- value: the computed result as a string
+- confidence: high, medium, or low
+- readable: true or false
+
+Rules:
+- Only calculate what is visibly present inside the selected crop.
+- If the crop is unreadable, incomplete, or ambiguous, set readable=false and value="".
+- Do not guess missing symbols, numbers, or operators.
+- Simplify exact arithmetic when possible.
+- No explanation outside the JSON.
+            `.trim(),
+          },
+          createImageUrlPart(drawingBuffer, drawingMimeType),
+        ],
+      },
+    ],
+  });
+
+  try {
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const parsed = JSON.parse(cleaned);
+    return {
+      expression: String(parsed?.expression || "").trim(),
+      value: String(parsed?.value || "").trim(),
+      confidence: String(parsed?.confidence || "").trim().toLowerCase(),
+      readable: Boolean(parsed?.readable),
+    };
+  } catch {
+    return {
+      expression: "",
+      value: "",
+      confidence: "low",
+      readable: false,
+    };
+  }
 };
 
 const getOrigin = (request) => {
@@ -573,7 +637,45 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         }
       }
     }
+    const mode = String(request.body?.mode || "hint").trim().toLowerCase();
 
+    if (mode === "calculate") {
+      const formattedContext = formatProblemContextForHint(problemContext);
+      const calculated = await calculateSelectionWithAzure({
+        drawingBuffer: file.buffer,
+        drawingMimeType: file.mimetype || "image/png",
+        problemContext: formattedContext,
+      });
+
+      return response.json({
+        expression: calculated.expression,
+        value: calculated.value,
+        confidence: calculated.confidence || "low",
+        readable: calculated.readable,
+        message: calculated.readable
+          ? ""
+          : "I could not reliably read the selected expression. Select a tighter area or write it more clearly.",
+      });
+    }
+
+    if (mode === "explain") {
+      const formattedContext = formatProblemContextForHint(problemContext);
+      const raw = await requestAzureChatCompletion({
+        temperature: 0.3,
+        maxTokens: 200,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Explain what the math expression or step in this image means.\n\nProblem context:\n${formattedContext || "None"}\n\nOne short paragraph. Use LaTeX for equations.`,
+            },
+            createImageUrlPart(file.buffer, file.mimetype || "image/png"),
+          ],
+        }],
+      });
+      return response.json({ explanation: raw });
+    }
     const analysisRaw = await interpretStudentStepWithAzure({
       drawingBuffer: file.buffer,
       drawingMimeType: file.mimetype || "image/png",
@@ -599,12 +701,18 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
 
     const formattedContext = formatProblemContextForHint(problemContext);
     const isUnreadableStep = !observedStep || observedStep.toLowerCase() === "unreadable";
+
+    const hintLevel = Math.min(4, Math.max(1, Number(request.body?.hintLevel) || 1));
+    const previousHints = Array.isArray(safeJsonParse(request.body?.previousHints))
+      ? safeJsonParse(request.body.previousHints).slice(0, 5).map(String)
+      : [];
     const hint = isUnreadableStep
       ? buildUnreadableHint(problemContext)
       : await generateHintWithAzure({
           problemContext: formattedContext,
           studentAnalysis: analysis,
-          hintLevel: 1,
+          hintLevel,
+          previousHints
         });
 
     response.json({

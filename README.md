@@ -57,6 +57,7 @@ Frontend:
 - `VITE_DEV_USER_ID`
 - `VITE_DEV_USER_NAME`
 - `VITE_DEV_USER_EMAIL`
+- `VITE_DEBUG_AI_IMAGES` (set `true` to mirror GPT-bound images in Network/Inspect mode)
 
 Backend:
 
@@ -69,3 +70,4 @@ Backend:
 - `AZURE_OPENAI_MODEL`
 - `AZURE_VISION_ENDPOINT`
 - `AZURE_VISION_KEY`
+- `STEPWISE_DEBUG_ROUTES` (set `true` to enable `/api/debug/echo-image`)

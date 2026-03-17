@@ -1,13 +1,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const normalizeFlag = (value) => String(value || "").trim().toLowerCase();
-const isLocalHost = () =>
-  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
 const canUseDevBypass = () => {
   const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
-  if (bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes") return true;
-  if (bypassFlag === "false" || bypassFlag === "0" || bypassFlag === "no") return false;
-  return import.meta.env.DEV && isLocalHost();
+  return bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes";
 };
 
 const buildDevHeaders = () => {

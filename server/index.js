@@ -1,7 +1,7 @@
 import express from "express";
 import multer from "multer";
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,9 +68,77 @@ const imageUpload = multer({
 });
 const MIN_PROBLEM_COUNT = 1;
 const MAX_PROBLEM_COUNT = 60;
+const SESSION_COOKIE_NAME = "stepwise_session";
+const OAUTH_STATE_TTL_SECONDS = 10 * 60;
+const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
 const readEnv = (name) => String(globalThis.process?.env?.[name] || "").trim();
+const toBase64Url = (value) =>
+  Buffer.from(String(value))
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+const fromBase64Url = (value) => {
+  const normalized = String(value).replace(/-/g, "+").replace(/_/g, "/");
+  const padding = normalized.length % 4;
+  const padded = padding ? `${normalized}${"=".repeat(4 - padding)}` : normalized;
+  return Buffer.from(padded, "base64").toString("utf-8");
+};
+
+const parseCookieHeader = (cookieHeader) =>
+  String(cookieHeader || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((cookies, entry) => {
+      const separator = entry.indexOf("=");
+      if (separator < 0) return cookies;
+      const key = entry.slice(0, separator).trim();
+      const value = entry.slice(separator + 1).trim();
+      if (!key) return cookies;
+      cookies[key] = decodeURIComponent(value);
+      return cookies;
+    }, {});
+
+const getSessionSecret = () => readEnv("AUTH_SESSION_SECRET") || "stepwise-local-auth-dev-secret";
+const signTokenPayload = (payload) => {
+  const secret = getSessionSecret();
+  const payloadJson = JSON.stringify(payload);
+  const encoded = toBase64Url(payloadJson);
+  const signature = createHmac("sha256", secret).update(encoded).digest("base64url");
+  return `${encoded}.${signature}`;
+};
+
+const parseSignedToken = (token) => {
+  const [encodedPayload = "", signature = ""] = String(token || "").split(".");
+  if (!encodedPayload || !signature) return null;
+
+  const expectedSignature = createHmac("sha256", getSessionSecret())
+    .update(encodedPayload)
+    .digest("base64url");
+
+  if (expectedSignature.length !== signature.length) return null;
+  const expectedBuffer = Buffer.from(expectedSignature);
+  const signatureBuffer = Buffer.from(signature);
+  if (!timingSafeEqual(expectedBuffer, signatureBuffer)) return null;
+
+  const payload = safeJsonParse(fromBase64Url(encodedPayload));
+  if (!payload || typeof payload !== "object") return null;
+  const expiryMs = Number(payload.exp || 0) * 1000;
+  if (!Number.isFinite(expiryMs) || Date.now() > expiryMs) return null;
+  return payload;
+};
+
+const buildCookie = (name, value, options = {}) => {
+  const parts = [`${name}=${encodeURIComponent(value)}`, "Path=/"];
+  if (Number.isFinite(options.maxAge)) parts.push(`Max-Age=${Math.max(0, Math.floor(options.maxAge))}`);
+  if (options.httpOnly !== false) parts.push("HttpOnly");
+  parts.push(`SameSite=${options.sameSite || "Lax"}`);
+  if (options.secure) parts.push("Secure");
+  return parts.join("; ");
+};
 
 const getAzureConfig = () => {
   const endpoint = trimTrailingSlash(readEnv("AZURE_OPENAI_ENDPOINT"));
@@ -334,6 +402,7 @@ Correctness: ${correctness || "unclear"}
 Confidence: ${confidence || "unknown"}
 
 Hint level: ${hintLevel}
+${previousHintsSection}
 
 Hint rules:
 
@@ -419,6 +488,80 @@ const getOrigin = (request) => {
   return `${protocol}://${request.get("host")}`;
 };
 
+const isLoopbackHost = (hostname) => {
+  const normalized = String(hostname || "").toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1";
+};
+
+const getGoogleOAuthConfig = () => {
+  const clientId = readEnv("GOOGLE_OAUTH_CLIENT_ID");
+  const clientSecret = readEnv("GOOGLE_OAUTH_CLIENT_SECRET");
+  if (!clientId || !clientSecret) return null;
+  return { clientId, clientSecret };
+};
+
+const canUseLocalGoogleAuth = (request) => {
+  const config = getGoogleOAuthConfig();
+  if (!config) return false;
+  try {
+    const requestUrl = new URL(getOrigin(request));
+    return isLoopbackHost(requestUrl.hostname);
+  } catch {
+    return false;
+  }
+};
+
+const getLocalGoogleRedirectUri = (request) => {
+  const configured = readEnv("GOOGLE_OAUTH_REDIRECT_URI");
+  if (configured) return configured;
+  return `${getOrigin(request)}/api/auth/google/callback`;
+};
+
+const getSessionCookieSecureFlag = (request) => {
+  const protocol = String(request.headers["x-forwarded-proto"] || request.protocol || "").toLowerCase();
+  return protocol === "https";
+};
+
+const getUserFromSessionCookie = (request) => {
+  const cookies = parseCookieHeader(request.headers.cookie);
+  const token = cookies[SESSION_COOKIE_NAME];
+  if (!token) return null;
+  const payload = parseSignedToken(token);
+  if (!payload?.user || typeof payload.user !== "object") return null;
+  const user = payload.user;
+  if (!user.id) return null;
+  return {
+    id: String(user.id),
+    name: String(user.name || "User"),
+    email: String(user.email || ""),
+    provider: String(user.provider || "google-local"),
+  };
+};
+
+const buildSessionCookieValue = (user) =>
+  signTokenPayload({
+    user,
+    exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+  });
+
+const buildOAuthStateValue = (request, returnTo) =>
+  signTokenPayload({
+    nonce: randomBytes(12).toString("hex"),
+    returnTo: getSafeReturnUrl(request, returnTo, "/assignments"),
+    exp: Math.floor(Date.now() / 1000) + OAUTH_STATE_TTL_SECONDS,
+  });
+
+const readOAuthStateValue = (request, rawState) => {
+  const payload = parseSignedToken(rawState);
+  if (!payload) return getSafeReturnUrl(request, null, "/login");
+  return getSafeReturnUrl(request, payload.returnTo, "/login");
+};
+
+const isAllowedLocalDevReturnUrl = (requestUrl, parsedUrl) =>
+  requestUrl.protocol === parsedUrl.protocol &&
+  isLoopbackHost(requestUrl.hostname) &&
+  isLoopbackHost(parsedUrl.hostname);
+
 const getSafeReturnUrl = (request, requestedUrl, fallbackPath = "/") => {
   const origin = getOrigin(request);
   const fallback = new URL(fallbackPath, origin);
@@ -426,10 +569,23 @@ const getSafeReturnUrl = (request, requestedUrl, fallbackPath = "/") => {
 
   try {
     const parsed = new URL(requestedUrl, origin);
-    if (parsed.origin !== origin) return fallback.toString();
+    const requestUrl = new URL(origin);
+    if (parsed.origin !== origin && !isAllowedLocalDevReturnUrl(requestUrl, parsed)) {
+      return fallback.toString();
+    }
     return parsed.toString();
   } catch {
     return fallback.toString();
+  }
+};
+
+const withQueryParam = (targetUrl, key, value) => {
+  try {
+    const parsed = new URL(targetUrl);
+    parsed.searchParams.set(key, value);
+    return parsed.toString();
+  } catch {
+    return targetUrl;
   }
 };
 
@@ -495,6 +651,9 @@ const getAuthenticatedUser = async (request) => {
   const userFromSimpleHeaders = headersToUser(request);
   if (userFromSimpleHeaders) return userFromSimpleHeaders;
 
+  const userFromSessionCookie = getUserFromSessionCookie(request);
+  if (userFromSessionCookie) return userFromSessionCookie;
+
   const headerPrincipal = parsePrincipalHeader(request.headers["x-ms-client-principal"]);
   const userFromHeader = principalToUser(headerPrincipal);
   if (userFromHeader) return userFromHeader;
@@ -533,6 +692,46 @@ const requireDb = (_request, response, next) => {
   }
   const detail = dbInitError ? ` ${dbInitError.message}` : "";
   response.status(503).json({ message: `Database is not ready.${detail}`.trim() });
+};
+
+const exchangeGoogleCodeForToken = async ({ code, redirectUri, clientId, clientSecret }) => {
+  const body = new URLSearchParams({
+    code,
+    client_id: clientId,
+    client_secret: clientSecret,
+    redirect_uri: redirectUri,
+    grant_type: "authorization_code",
+  });
+
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  if (!tokenResponse.ok) {
+    const detail = await tokenResponse.text().catch(() => "");
+    throw new Error(`Google token exchange failed (${tokenResponse.status}). ${detail}`.trim());
+  }
+
+  return tokenResponse.json();
+};
+
+const fetchGoogleUserInfo = async (accessToken) => {
+  const response = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`Google userinfo request failed (${response.status}). ${detail}`.trim());
+  }
+
+  return response.json();
 };
 
 const parseProblemCount = (value) => {
@@ -744,9 +943,95 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
 });
 
 app.get("/api/auth/google/login", (request, response) => {
+  if (canUseLocalGoogleAuth(request)) {
+    const config = getGoogleOAuthConfig();
+    if (!config) {
+      response.status(503).json({ message: "Google OAuth is not configured for localhost." });
+      return;
+    }
+
+    const returnTo = getSafeReturnUrl(request, request.query.returnTo, "/assignments");
+    const redirectUri = getLocalGoogleRedirectUri(request);
+    const state = buildOAuthStateValue(request, returnTo);
+    const params = new URLSearchParams({
+      response_type: "code",
+      client_id: config.clientId,
+      redirect_uri: redirectUri,
+      scope: "openid email profile",
+      access_type: "offline",
+      prompt: "select_account",
+      state,
+    });
+    response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+    return;
+  }
+
   const returnTo = getSafeReturnUrl(request, request.query.returnTo, "/assignments");
   const loginUrl = `/.auth/login/google?post_login_redirect_uri=${encodeURIComponent(returnTo)}`;
   response.redirect(loginUrl);
+});
+
+app.get("/api/auth/google/callback", async (request, response) => {
+  if (!canUseLocalGoogleAuth(request)) {
+    response.status(404).json({ message: "Local Google callback is not enabled." });
+    return;
+  }
+
+  const config = getGoogleOAuthConfig();
+  if (!config) {
+    response.status(503).json({ message: "Google OAuth is not configured for localhost." });
+    return;
+  }
+
+  const authCode = String(request.query.code || "").trim();
+  const state = String(request.query.state || "").trim();
+  const returnTo = readOAuthStateValue(request, state);
+
+  if (!authCode || !state) {
+    response.redirect(withQueryParam(getSafeReturnUrl(request, returnTo, "/login"), "authError", "google_auth_failed"));
+    return;
+  }
+
+  try {
+    const redirectUri = getLocalGoogleRedirectUri(request);
+    const tokenPayload = await exchangeGoogleCodeForToken({
+      code: authCode,
+      redirectUri,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
+    });
+
+    const accessToken = String(tokenPayload?.access_token || "").trim();
+    if (!accessToken) {
+      throw new Error("Google token payload did not include an access token.");
+    }
+
+    const profile = await fetchGoogleUserInfo(accessToken);
+    const userId = String(profile?.sub || "").trim();
+    if (!userId) {
+      throw new Error("Google user profile did not include sub.");
+    }
+
+    const user = {
+      id: userId,
+      name: String(profile?.name || profile?.given_name || "User"),
+      email: String(profile?.email || ""),
+      provider: "google-local",
+    };
+
+    response.append(
+      "Set-Cookie",
+      buildCookie(SESSION_COOKIE_NAME, buildSessionCookieValue(user), {
+        maxAge: SESSION_TTL_SECONDS,
+        secure: getSessionCookieSecureFlag(request),
+        sameSite: "Lax",
+      }),
+    );
+    response.redirect(returnTo);
+  } catch (error) {
+    console.error("Local Google auth callback failed:", error.message);
+    response.redirect(withQueryParam(getSafeReturnUrl(request, returnTo, "/login"), "authError", "google_auth_failed"));
+  }
 });
 
 app.get("/api/auth/me", async (request, response) => {
@@ -763,6 +1048,20 @@ app.get("/api/auth/me", async (request, response) => {
 });
 
 app.post("/api/auth/logout", (request, response) => {
+  const sessionUser = getUserFromSessionCookie(request);
+  if (sessionUser) {
+    response.append(
+      "Set-Cookie",
+      buildCookie(SESSION_COOKIE_NAME, "", {
+        maxAge: 0,
+        secure: getSessionCookieSecureFlag(request),
+        sameSite: "Lax",
+      }),
+    );
+    response.json({ logoutUrl: null });
+    return;
+  }
+
   const returnTo = getSafeReturnUrl(request, request.query.returnTo, "/login");
   const logoutUrl = `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(returnTo)}`;
   response.json({ logoutUrl });

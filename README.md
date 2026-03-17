@@ -35,7 +35,15 @@ Run the frontend:
 npm run dev
 ```
 
-For localhost auth, the frontend now supports a dev bypass user. It is enabled automatically on localhost in Vite dev mode, or explicitly with `VITE_DEV_AUTH_BYPASS=true`.
+For localhost auth, you now have two options:
+
+- Dev bypass user: set `VITE_DEV_AUTH_BYPASS=true`.
+- Real Google OAuth on localhost: set `VITE_DEV_AUTH_BYPASS=false` and configure backend Google OAuth env vars.
+
+When using real Google OAuth on localhost, create a Google OAuth Web client and set:
+
+- Authorized JavaScript origins: `http://localhost:5173`
+- Authorized redirect URI: `http://localhost:8080/api/auth/google/callback`
 
 Run the optional Python AI service only if you explicitly want the standalone FastAPI path:
 
@@ -62,6 +70,10 @@ Frontend:
 Backend:
 
 - `DATABASE_URL`
+- `AUTH_SESSION_SECRET` (required for local Google OAuth session cookies)
+- `GOOGLE_OAUTH_CLIENT_ID` (required for local Google OAuth)
+- `GOOGLE_OAUTH_CLIENT_SECRET` (required for local Google OAuth)
+- `GOOGLE_OAUTH_REDIRECT_URI` (optional override, defaults to `http://localhost:8080/api/auth/google/callback`)
 - `AZURE_STORAGE_CONNECTION_STRING` or `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_ACCESS_KEY`
 - `AZURE_STORAGE_CONTAINER`
 - `AZURE_OPENAI_API_KEY`

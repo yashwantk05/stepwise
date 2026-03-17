@@ -1379,14 +1379,19 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
               Explain
             </button>
           </div>
-          <button type="button" onClick={handleSave}>Save Drawing</button>
-          <button
-            type="button"
-            className="outline"
-            onClick={() => navigate(`/assignments/${assignmentId}`)}
-          >
-            Back
-          </button>
+          <div className="topbar-right-actions">
+            <button type="button" onClick={handleSave}>Save Drawing</button>
+            <button
+              type="button"
+              className="outline"
+              onClick={() => navigate(`/assignments/${assignmentId}`)}
+            >
+              Back
+            </button>
+          </div>
+          <p className="subtle ai-selection-note">
+            For Calc/Explain, first choose the tool, then drag on the whiteboard to select a portion.
+          </p>
         </div>
       </header>
 

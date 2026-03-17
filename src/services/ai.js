@@ -1,13 +1,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const normalizeFlag = (value) => String(value || "").trim().toLowerCase();
-const isLocalHost = () =>
-  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
 const canUseDevBypass = () => {
   const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
-  if (bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes") return true;
-  if (bypassFlag === "false" || bypassFlag === "0" || bypassFlag === "no") return false;
-  return import.meta.env.DEV && isLocalHost();
+  return bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes";
 };
 
 const buildDevHeaders = () => {
@@ -23,10 +19,10 @@ const buildDevHeaders = () => {
   };
 };
 
-const isDebugImagesEnabled = () =>
+export const isDebugImagesEnabled = () =>
   ["true", "1", "yes"].includes(normalizeFlag(import.meta.env.VITE_DEBUG_AI_IMAGES));
 
-const debugEchoImage = async (blob, label) => {
+export const debugEchoImage = async (blob, label) => {
   const formData = new FormData();
   formData.append("file", blob, `${label || "debug"}.png`);
 
@@ -45,16 +41,11 @@ const debugEchoImage = async (blob, label) => {
 
 export async function analyzeDrawing(
   blob,
-  { assignmentId, problemIndex, problemImageUrl, mode } = {},
+  { assignmentId, problemIndex, mode, hintLevel, previousHints} = {},
 ) {
   if (isDebugImagesEnabled()) {
-    void debugEchoImage(blob, "whiteboard").catch(() => {});
-    if (problemImageUrl) {
-      void fetch(problemImageUrl)
-        .then((response) => response.blob())
-        .then((problemBlob) => debugEchoImage(problemBlob, "problem"))
-        .catch(() => {});
-    }
+    const label = `gpt-analyze-${String(mode || "hint").toLowerCase()}-drawing`;
+    void debugEchoImage(blob, label).catch(() => {});
   }
 
   const formData = new FormData();
@@ -68,7 +59,12 @@ export async function analyzeDrawing(
   if (mode) {
     formData.append("mode", String(mode));
   }
-
+  if (Number.isInteger(hintLevel)) {
+    formData.append("hintLevel", String(hintLevel));
+  }
+  if (Array.isArray(previousHints) && previousHints.length > 0) {
+    formData.append("previousHints", JSON.stringify(previousHints));
+  }
   const endpoint = import.meta.env.VITE_AI_ANALYZE_URL || `${API_BASE}/ai/analyze`;
 
   const response = await fetch(endpoint, {
@@ -84,4 +80,3 @@ export async function analyzeDrawing(
 
   return response.json();
 }
-

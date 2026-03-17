@@ -3,14 +3,10 @@ let cachedUser = null;
 
 const toUrl = (path) => `${API_BASE}${path}`;
 const normalizeFlag = (value) => String(value || "").trim().toLowerCase();
-const isLocalHost = () =>
-  ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
 
 const canUseDevBypass = () => {
   const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
-  if (bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes") return true;
-  if (bypassFlag === "false" || bypassFlag === "0" || bypassFlag === "no") return false;
-  return import.meta.env.DEV && isLocalHost();
+  return bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes";
 };
 
 const buildDevUser = () => ({
@@ -42,6 +38,25 @@ const buildUserHeaders = () =>
         "x-stepwise-user-provider": cachedUser.provider || "",
       }
     : {};
+
+const isDebugImagesEnabled = () =>
+  ["true", "1", "yes"].includes(normalizeFlag(import.meta.env.VITE_DEBUG_AI_IMAGES));
+
+const debugEchoImage = async (blob, label) => {
+  const formData = new FormData();
+  formData.append("file", blob, `${label || "debug"}.png`);
+
+  const response = await fetch(`${API_BASE}/debug/echo-image?label=${encodeURIComponent(label)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: buildUserHeaders(),
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new Error("Debug echo failed.");
+  }
+};
 
 const request = async (path, options = {}) => {
   const response = await fetch(toUrl(path), {
@@ -124,7 +139,8 @@ export const signOut = async () => {
     return { logoutUrl: null };
   }
   cachedUser = null;
-  return request("/auth/logout", { method: "POST" });
+  const returnTo = encodeURIComponent(`${window.location.origin}/login`);
+  return request(`/auth/logout?returnTo=${returnTo}`, { method: "POST" });
 };
 
 export const requestAccountDeletion = async () => {
@@ -249,6 +265,11 @@ export const getProblemImage = async (assignmentId, problemIndex) =>
   );
 
 export const saveProblemImage = async (assignmentId, problemIndex, file) => {
+  if (isDebugImagesEnabled()) {
+    const label = `gpt-problem-context-source-problem-${problemIndex}`;
+    void debugEchoImage(file, label).catch(() => {});
+  }
+
   const formData = new FormData();
   formData.append("file", file);
   return request(

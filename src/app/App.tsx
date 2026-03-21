@@ -22,6 +22,8 @@ function App() {
   const [user, setUser] = useState<any>(null);
   const [authReady, setAuthReady] = useState(false);
   const [route, setRoute] = useState<Route>({ type: 'dashboard' });
+  const [isCompactLayout, setIsCompactLayout] = useState(() => window.innerWidth <= 1024);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 1024);
 
   useEffect(() => {
     getCurrentUser()
@@ -34,6 +36,17 @@ function App() {
       .finally(() => {
         setAuthReady(true);
       });
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => {
+      const compact = window.innerWidth <= 1024;
+      setIsCompactLayout(compact);
+      setIsSidebarOpen(!compact);
+    };
+
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   const handleSignOut = useCallback(async () => {
@@ -57,7 +70,10 @@ function App() {
     } else if (page === 'whiteboard') {
       setRoute({ type: 'whiteboard' });
     }
-  }, []);
+    if (isCompactLayout) {
+      setIsSidebarOpen(false);
+    }
+  }, [isCompactLayout]);
 
   const openSubject = useCallback((subjectId: string) => {
     setRoute({ type: 'subject', subjectId });
@@ -104,13 +120,28 @@ function App() {
 
   return (
     <div className="app-layout">
-      <Sidebar currentPage={getCurrentPage()} onNavigate={navigate} />
+      {isCompactLayout && isSidebarOpen && (
+        <button
+          className="sidebar-backdrop"
+          aria-label="Close menu"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+      <Sidebar
+        currentPage={getCurrentPage()}
+        onNavigate={navigate}
+        isOpen={isSidebarOpen}
+        isCompact={isCompactLayout}
+        onClose={() => setIsSidebarOpen(false)}
+      />
       
       <div className="app-main">
         <Topbar 
           user={user} 
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
+          showSidebarToggle={isCompactLayout}
+          onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
         />
         
         {route.type === 'dashboard' && <DashboardPage user={user} />}

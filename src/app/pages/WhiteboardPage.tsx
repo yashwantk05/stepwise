@@ -50,35 +50,14 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
   return (
     <div className="app-content">
       <div className="welcome-section">
-        <h1>🎯 AI Whiteboard</h1>
+        <p className="eyebrow">AI Whiteboard</p>
+        <h1>My Subjects</h1>
         <p>Create subjects and manage your problem-solving assignments</p>
       </div>
 
-      <div className="form-section mb-3">
-        <h2>Create New Subject</h2>
-        <form onSubmit={handleCreateSubject} className="form-row">
-          <input
-            type="text"
-            value={subjectName}
-            onChange={(e) => setSubjectName(e.target.value)}
-            placeholder="Subject name (e.g., Calculus, Physics)"
-            disabled={loading}
-          />
-          <button type="submit" className="btn-primary" disabled={loading || !subjectName.trim()}>
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M10 5v10M5 10h10" strokeLinecap="round" />
-            </svg>
-            Create Subject
-          </button>
-        </form>
-      </div>
-
       <div>
-        <h2 className="mb-2" style={{ fontSize: '20px', fontWeight: 600 }}>
-          📚 My Subjects
-        </h2>
         {subjects.length === 0 ? (
-          <p className="text-muted">No subjects yet. Create your first subject above to get started!</p>
+          <p className="text-muted">No subjects yet. Create your first subject below to get started.</p>
         ) : (
           <div className="cards-grid">
             {subjects.map((subject) => (
@@ -117,6 +96,25 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
             ))}
           </div>
         )}
+      </div>
+
+      <div className="form-section mb-3">
+        <h2>Create New Subject</h2>
+        <form onSubmit={handleCreateSubject} className="form-row">
+          <input
+            type="text"
+            value={subjectName}
+            onChange={(e) => setSubjectName(e.target.value)}
+            placeholder="Subject name (e.g., Calculus, Physics)"
+            disabled={loading}
+          />
+          <button type="submit" className="btn-primary" disabled={loading || !subjectName.trim()}>
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M10 5v10M5 10h10" strokeLinecap="round" />
+            </svg>
+            Create Subject
+          </button>
+        </form>
       </div>
     </div>
   );

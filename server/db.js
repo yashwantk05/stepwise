@@ -156,6 +156,17 @@ export const initDb = async () => {
       ALTER TABLE problem_contexts
       ADD COLUMN IF NOT EXISTS answer_key TEXT;
     `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS problem_titles (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        assignment_id TEXT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+        problem_index INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
   })();
 
   return initPromise;
@@ -654,6 +665,105 @@ export const removeProblemContext = async (userId, assignmentId, problemIndex) =
   );
   if (rows.length === 0) return null;
   return mapProblemContext(rows[0]);
+};
+
+const mapProblemTitle = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  assignmentId: row.assignment_id,
+  problemIndex: Number(row.problem_index),
+  title: String(row.title || "").trim(),
+  updatedAt: Number(row.updated_at),
+});
+
+export const listProblemTitles = async (userId, assignmentId) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT id, user_id, assignment_id, problem_index, title, updated_at
+      FROM problem_titles
+      WHERE user_id = $1 AND assignment_id = $2
+      ORDER BY problem_index ASC;
+    `,
+    [userId, assignmentId],
+  );
+  return rows.map(mapProblemTitle);
+};
+
+export const setProblemTitle = async (userId, assignmentId, problemIndex, title) => {
+  const normalizedTitle = String(title || "").trim();
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  if (!normalizedTitle) {
+    await getPool().query(`DELETE FROM problem_titles WHERE id = $1;`, [id]);
+    return null;
+  }
+
+  const now = Date.now();
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO problem_titles (id, user_id, assignment_id, problem_index, title, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (id)
+      DO UPDATE SET
+        title = EXCLUDED.title,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, user_id, assignment_id, problem_index, title, updated_at;
+    `,
+    [id, userId, assignmentId, problemIndex, normalizedTitle, now],
+  );
+  return mapProblemTitle(rows[0]);
+};
+
+export const removeProblemTitle = async (userId, assignmentId, problemIndex) => {
+  const id = `${userId}:${assignmentId}:${problemIndex}`;
+  const { rows } = await getPool().query(
+    `
+      DELETE FROM problem_titles
+      WHERE id = $1
+      RETURNING id, user_id, assignment_id, problem_index, title, updated_at;
+    `,
+    [id],
+  );
+  if (rows.length === 0) return null;
+  return mapProblemTitle(rows[0]);
+};
+
+export const shiftProblemIndexesAfter = async (userId, assignmentId, removedProblemIndex) => {
+  const tables = ["problem_scenes", "problem_images", "problem_contexts", "problem_titles"];
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    for (const tableName of tables) {
+      await client.query(
+        `
+          UPDATE ${tableName}
+          SET
+            problem_index = -problem_index,
+            id = user_id || ':' || assignment_id || ':' || (-problem_index)
+          WHERE user_id = $1 AND assignment_id = $2 AND problem_index > $3;
+        `,
+        [userId, assignmentId, removedProblemIndex],
+      );
+
+      await client.query(
+        `
+          UPDATE ${tableName}
+          SET
+            problem_index = (-problem_index) - 1,
+            id = user_id || ':' || assignment_id || ':' || (((-problem_index) - 1))
+          WHERE user_id = $1 AND assignment_id = $2 AND problem_index < 0;
+        `,
+        [userId, assignmentId],
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 };
 
 export const deleteUserData = async (userId) => {

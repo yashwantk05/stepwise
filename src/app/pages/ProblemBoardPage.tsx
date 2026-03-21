@@ -1053,34 +1053,6 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         {!problemImageUrl && <p className="subtle">No problem image set.</p>}
       </section>
 
-      <section className="panel">
-        <h2>Answer Key (LaTeX supported)</h2>
-        <div className="answer-key-editor">
-          <textarea
-            id="answer-key"
-            value={answerKeyDraft}
-            onChange={(e) => setAnswerKeyDraft(e.target.value)}
-            placeholder="Enter expected answer or key steps... Use $x^2$ for inline math or $$\frac{1}{2}$$ for display math."
-            rows={3}
-          />
-          <div className="control-row">
-            <button
-              type="button"
-              onClick={handleSaveAnswerKey}
-              disabled={isSavingAnswerKey}
-            >
-              {isSavingAnswerKey ? "Saving..." : "Save Answer Key"}
-            </button>
-          </div>
-          {problemContextMeta?.answerKey && (
-            <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac' }}>
-              <p className="subtle" style={{ marginBottom: '8px' }}>Preview:</p>
-              <LatexText text={problemContextMeta.answerKey} />
-            </div>
-          )}
-        </div>
-      </section>
-
       <div className="whiteboard-stage">
         <div
           ref={whiteboardAreaRef}
@@ -1198,6 +1170,34 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           </div>
         </aside>
       </div>
+
+      <section className="panel">
+        <h2>Optional Answer Key</h2>
+        <div className="answer-key-editor">
+          <textarea
+            id="answer-key"
+            value={answerKeyDraft}
+            onChange={(e) => setAnswerKeyDraft(e.target.value)}
+            placeholder="Type the answer key if it is provided with the problem. This will be used to validate the solution."
+            rows={3}
+          />
+          <div className="control-row">
+            <button
+              type="button"
+              onClick={handleSaveAnswerKey}
+              disabled={isSavingAnswerKey}
+            >
+              {isSavingAnswerKey ? "Saving..." : "Save Answer Key"}
+            </button>
+          </div>
+          {problemContextMeta?.answerKey && (
+            <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac' }}>
+              <p className="subtle" style={{ marginBottom: '8px' }}>Preview:</p>
+              <LatexText text={problemContextMeta.answerKey} />
+            </div>
+          )}
+        </div>
+      </section>
 
       {isPickerOpen && (
         <div className="modal-overlay" onClick={closePicker}>

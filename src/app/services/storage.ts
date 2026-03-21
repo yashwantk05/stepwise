@@ -10,6 +10,7 @@ interface User {
   name: string;
   email: string;
   provider?: string;
+  avatarUrl?: string;
 }
 
 interface Subject {
@@ -27,6 +28,11 @@ interface Assignment {
   updatedAt?: number;
   subjectId?: string;
   [key: string]: unknown;
+}
+
+interface AssignmentProblem {
+  problemIndex: number;
+  title: string;
 }
 
 interface FileRecord {
@@ -103,6 +109,7 @@ const buildUserHeaders = () =>
         "x-stepwise-user-name": cachedUser.name || "",
         "x-stepwise-user-email": cachedUser.email || "",
         "x-stepwise-user-provider": cachedUser.provider || "",
+        "x-stepwise-user-avatar": cachedUser.avatarUrl || "",
       }
     : {};
 
@@ -165,6 +172,15 @@ const mapEasyAuthUser = (payload: unknown): User | null => {
         "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
       ) || "",
     provider: principal.identityProvider || "",
+    avatarUrl:
+      readClaim(
+        "picture",
+        "urn:google:picture",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/picture",
+        "avatar_url",
+        "profile",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/uri",
+      ) || "",
   };
 };
 
@@ -385,6 +401,39 @@ export const deleteLastProblemFromAssignment = async (
 ): Promise<{ assignment: Assignment; removedProblemIndex: number; removedArtifacts: boolean }> => {
   const result = (await request(
     `/assignments/${encodeURIComponent(assignmentId)}/problems/last`,
+    { method: "DELETE" },
+  )) as { assignment: Assignment; removedProblemIndex: number; removedArtifacts: boolean };
+
+  return {
+    ...result,
+    assignment: withSubjectOnAssignment(result.assignment),
+  };
+};
+
+export const listAssignmentProblems = async (assignmentId: string): Promise<AssignmentProblem[]> => {
+  return (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems`)) as AssignmentProblem[];
+};
+
+export const renameAssignmentProblem = async (
+  assignmentId: string,
+  problemIndex: number,
+  title: string,
+): Promise<AssignmentProblem> => {
+  return (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ title }),
+  })) as AssignmentProblem;
+};
+
+export const deleteProblemFromAssignment = async (
+  assignmentId: string,
+  problemIndex: number,
+): Promise<{ assignment: Assignment; removedProblemIndex: number; removedArtifacts: boolean }> => {
+  const result = (await request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}`,
     { method: "DELETE" },
   )) as { assignment: Assignment; removedProblemIndex: number; removedArtifacts: boolean };
 

@@ -3,22 +3,44 @@ import React from 'react';
 interface SidebarProps {
   currentPage: string;
   onNavigate: (page: string) => void;
+  isOpen?: boolean;
+  isCompact?: boolean;
+  onClose?: () => void;
 }
 
-export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = false, onClose }: SidebarProps) {
+  const handleNavigate = (page: string) => {
+    onNavigate(page);
+    if (isCompact) {
+      onClose?.();
+    }
+  };
+
   return (
-    <div className="app-sidebar">
+    <div className={`app-sidebar ${isOpen ? 'open' : ''}`}>
       <div className="sidebar-header">
         <div className="sidebar-logo">M</div>
         <div className="sidebar-title">
           <h1>StepWise</h1>
         </div>
+        {isCompact && (
+          <button
+            className="icon-button sidebar-close-btn"
+            onClick={onClose}
+            title="Toggle menu"
+            aria-label="Toggle menu"
+          >
+            <svg width="24" height="24" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M3 5h14M3 10h14M3 15h14" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <nav className="sidebar-nav">
         <button
           className={`nav-item ${currentPage === 'dashboard' ? 'active' : ''}`}
-          onClick={() => onNavigate('dashboard')}
+          onClick={() => handleNavigate('dashboard')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
@@ -33,7 +55,7 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
         <button
           className={`nav-item ${currentPage === 'whiteboard' ? 'active' : ''}`}
-          onClick={() => onNavigate('whiteboard')}
+          onClick={() => handleNavigate('whiteboard')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">

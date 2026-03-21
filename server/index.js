@@ -30,12 +30,16 @@ import {
   listProblemImageBlobNamesForUser,
   listAssignmentsForUser,
   listSceneBlobNamesForAssignment,
+  listProblemTitles,
   removeProblemImage,
   removeProblemContext,
+  removeProblemTitle,
   removeScene,
   removeAssignmentPdf,
   removeAssignment,
   setAssignmentProblemCount,
+  setProblemTitle,
+  shiftProblemIndexesAfter,
   setProblemAnswerKey,
   upsertProblemContext,
   upsertProblemImage,
@@ -535,6 +539,7 @@ const getUserFromSessionCookie = (request) => {
     name: String(user.name || "User"),
     email: String(user.email || ""),
     provider: String(user.provider || "google-local"),
+    avatarUrl: String(user.avatarUrl || ""),
   };
 };
 
@@ -620,6 +625,16 @@ const principalToUser = (principal) => {
         "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
       ) || "",
     provider: principal.identityProvider || "",
+    avatarUrl:
+      readClaim(
+        claims,
+        "picture",
+        "urn:google:picture",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/picture",
+        "avatar_url",
+        "profile",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/uri",
+      ) || "",
   };
 };
 
@@ -631,19 +646,23 @@ const headersToUser = (request) => {
       name: String(request.headers["x-stepwise-user-name"] || "User"),
       email: String(request.headers["x-stepwise-user-email"] || ""),
       provider: String(request.headers["x-stepwise-user-provider"] || "easy-auth"),
+      avatarUrl: String(request.headers["x-stepwise-user-avatar"] || ""),
     };
   }
 
   const userId = request.headers["x-ms-client-principal-id"];
   if (!userId) return null;
 
+  const decodedPrincipal = parsePrincipalHeader(request.headers["x-ms-client-principal"]);
+  const userFromPrincipal = principalToUser(decodedPrincipal);
   const name = request.headers["x-ms-client-principal-name"] || "User";
   const provider = request.headers["x-ms-client-principal-idp"] || "";
   return {
     id: String(userId),
-    name: String(name),
-    email: String(name),
+    name: String(userFromPrincipal?.name || name),
+    email: String(userFromPrincipal?.email || name),
     provider: String(provider),
+    avatarUrl: String(userFromPrincipal?.avatarUrl || ""),
   };
 };
 
@@ -1017,6 +1036,7 @@ app.get("/api/auth/google/callback", async (request, response) => {
       name: String(profile?.name || profile?.given_name || "User"),
       email: String(profile?.email || ""),
       provider: "google-local",
+      avatarUrl: String(profile?.picture || ""),
     };
 
     response.append(
@@ -1155,6 +1175,43 @@ app.post("/api/assignments/:id/problems/add", requireDb, requireAuth, async (req
   response.json(updated);
 });
 
+app.get("/api/assignments/:id/problems", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const records = await listProblemTitles(request.user.id, request.params.id);
+  const titleByIndex = new Map(records.map((record) => [record.problemIndex, record.title]));
+  const problems = Array.from({ length: assignment.problemCount }, (_value, index) => {
+    const problemIndex = index + 1;
+    return {
+      problemIndex,
+      title: titleByIndex.get(problemIndex) || `Problem ${problemIndex}`,
+    };
+  });
+  response.json(problems);
+});
+
+app.patch("/api/assignments/:id/problems/:problemIndex", requireDb, requireAuth, async (request, response) => {
+  const target = await getAssignmentAndProblemIndex(request, response);
+  if (!target) return;
+  const { problemIndex } = target;
+
+  const nextTitle = String(request.body?.title || "").trim();
+  if (!nextTitle) {
+    response.status(400).json({ message: "Problem title is required." });
+    return;
+  }
+
+  const record = await setProblemTitle(request.user.id, request.params.id, problemIndex, nextTitle);
+  response.json({
+    problemIndex,
+    title: record?.title || `Problem ${problemIndex}`,
+  });
+});
+
 app.delete(
   "/api/assignments/:id/problems/last",
   requireDb,
@@ -1178,6 +1235,7 @@ app.delete(
       removeProblemImage(request.user.id, request.params.id, removedProblemIndex),
     ]);
     await removeProblemContext(request.user.id, request.params.id, removedProblemIndex);
+    await removeProblemTitle(request.user.id, request.params.id, removedProblemIndex);
     if (removedScene?.blobName) {
       await deleteBlobIfExists(removedScene.blobName);
     }
@@ -1194,6 +1252,51 @@ app.delete(
     response.json({
       assignment: updated,
       removedProblemIndex,
+      removedArtifacts: Boolean(removedScene || removedImage),
+    });
+  },
+);
+
+app.delete(
+  "/api/assignments/:id/problems/:problemIndex",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+
+    const { assignment, problemIndex } = target;
+    if (assignment.problemCount <= MIN_PROBLEM_COUNT) {
+      response
+        .status(400)
+        .json({ message: `Assignments must have at least ${MIN_PROBLEM_COUNT} problem.` });
+      return;
+    }
+
+    const [removedScene, removedImage] = await Promise.all([
+      removeScene(request.user.id, request.params.id, problemIndex),
+      removeProblemImage(request.user.id, request.params.id, problemIndex),
+    ]);
+    await removeProblemContext(request.user.id, request.params.id, problemIndex);
+    await removeProblemTitle(request.user.id, request.params.id, problemIndex);
+
+    if (removedScene?.blobName) {
+      await deleteBlobIfExists(removedScene.blobName);
+    }
+    if (removedImage?.blobName) {
+      await deleteBlobIfExists(removedImage.blobName);
+    }
+
+    await shiftProblemIndexesAfter(request.user.id, request.params.id, problemIndex);
+    const updated = await setAssignmentProblemCount(
+      request.user.id,
+      request.params.id,
+      assignment.problemCount - 1,
+    );
+
+    response.json({
+      assignment: updated,
+      removedProblemIndex: problemIndex,
       removedArtifacts: Boolean(removedScene || removedImage),
     });
   },

@@ -43,6 +43,20 @@ export function Sidebar({ currentPage, onNavigate }: SidebarProps) {
           </span>
           AI Whiteboard
         </button>
+
+        <button
+          className={`nav-item ${currentPage === 'notes' ? 'active' : ''}`}
+          onClick={() => onNavigate('notes')}
+        >
+          <span className="nav-icon">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M5 3h8l3 3v11a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+              <path d="M13 3v4h4" />
+              <path d="M7 10h6M7 13h6" strokeLinecap="round" />
+            </svg>
+          </span>
+          My Notes
+        </button>
       </nav>
     </div>
   );

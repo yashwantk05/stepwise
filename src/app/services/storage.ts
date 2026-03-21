@@ -37,9 +37,14 @@ interface FileRecord {
 
 interface Note {
   id: string;
-  fileName: string;
-  size: number;
-  uploadedAt: number;
+  title: string;
+  content: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+  fileName?: string;
+  size?: number;
+  uploadedAt?: number;
 }
 
 let cachedUser: User | null = null;
@@ -277,8 +282,108 @@ export const deleteSubject = async (id: string): Promise<void> => {
   }
 };
 
+const normalizeNote = (entry: Partial<Note> & Record<string, unknown>): Note => {
+  const createdAt =
+    typeof entry.createdAt === "number"
+      ? entry.createdAt
+      : typeof entry.uploadedAt === "number"
+        ? entry.uploadedAt
+        : Date.now();
+
+  const updatedAt =
+    typeof entry.updatedAt === "number"
+      ? entry.updatedAt
+      : typeof entry.uploadedAt === "number"
+        ? entry.uploadedAt
+        : createdAt;
+
+  const titleSource =
+    typeof entry.title === "string" && entry.title.trim()
+      ? entry.title
+      : typeof entry.fileName === "string" && entry.fileName.trim()
+        ? entry.fileName
+        : "Untitled Note";
+
+  const content =
+    typeof entry.content === "string"
+      ? entry.content
+      : typeof entry.fileName === "string"
+        ? `Imported file: ${entry.fileName}`
+        : "";
+
+  return {
+    id: typeof entry.id === "string" && entry.id ? entry.id : `note-${Date.now()}`,
+    title: titleSource,
+    content,
+    tags: Array.isArray(entry.tags)
+      ? entry.tags.filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
+      : [],
+    createdAt,
+    updatedAt,
+    fileName: typeof entry.fileName === "string" ? entry.fileName : undefined,
+    size: typeof entry.size === "number" ? entry.size : undefined,
+    uploadedAt: typeof entry.uploadedAt === "number" ? entry.uploadedAt : undefined,
+  };
+};
+
+const saveNotes = (subjectId: string, notes: Note[]) => {
+  writeJson(`notes-${subjectId}`, notes);
+};
+
 export const listNotes = async (subjectId: string): Promise<Note[]> => {
-  return readJson<Note[]>(`notes-${subjectId}`, []);
+  const rawNotes = readJson<Array<Partial<Note> & Record<string, unknown>>>(`notes-${subjectId}`, []);
+  const normalized = rawNotes.map(normalizeNote);
+  saveNotes(subjectId, normalized);
+  return normalized;
+};
+
+export const createTextNote = async (
+  subjectId: string,
+  input: { title: string; content?: string; tags?: string[] },
+): Promise<Note> => {
+  const notes = await listNotes(subjectId);
+  const timestamp = Date.now();
+  const newNote: Note = {
+    id: `note-${timestamp}`,
+    title: input.title.trim() || "Untitled Note",
+    content: (input.content || "").trim(),
+    tags: Array.isArray(input.tags)
+      ? input.tags.filter((tag) => tag.trim().length > 0).slice(0, 6)
+      : [],
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  notes.unshift(newNote);
+  saveNotes(subjectId, notes);
+  return newNote;
+};
+
+export const updateTextNote = async (
+  subjectId: string,
+  noteId: string,
+  updates: { title: string; content: string; tags?: string[] },
+): Promise<Note> => {
+  const notes = await listNotes(subjectId);
+  const noteIndex = notes.findIndex((entry) => entry.id === noteId);
+  if (noteIndex === -1) {
+    throw new Error("Note not found");
+  }
+
+  const current = notes[noteIndex];
+  const updatedNote: Note = {
+    ...current,
+    title: updates.title.trim() || current.title,
+    content: updates.content,
+    tags: Array.isArray(updates.tags)
+      ? updates.tags.filter((tag) => tag.trim().length > 0).slice(0, 6)
+      : current.tags,
+    updatedAt: Date.now(),
+  };
+
+  notes[noteIndex] = updatedNote;
+  saveNotes(subjectId, notes);
+  return updatedNote;
 };
 
 export const uploadNote = async (subjectId: string, file: File): Promise<Note> => {
@@ -286,6 +391,11 @@ export const uploadNote = async (subjectId: string, file: File): Promise<Note> =
   const noteId = `note-${Date.now()}`;
   const newNote: Note = {
     id: noteId,
+    title: file.name,
+    content: `Imported file: ${file.name}`,
+    tags: ["Uploaded"],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
     fileName: file.name,
     size: file.size,
     uploadedAt: Date.now(),
@@ -297,7 +407,7 @@ export const uploadNote = async (subjectId: string, file: File): Promise<Note> =
       const base64 = String(reader.result || "");
       localStorage.setItem(`note-${subjectId}-${noteId}`, base64);
       notes.unshift(newNote);
-      writeJson(`notes-${subjectId}`, notes);
+      saveNotes(subjectId, notes);
       resolve(newNote);
     };
     reader.onerror = reject;
@@ -316,7 +426,7 @@ export const downloadNoteBlob = async (subjectId: string, noteId: string): Promi
 export const deleteNote = async (subjectId: string, noteId: string): Promise<void> => {
   const notes = await listNotes(subjectId);
   const filtered = notes.filter((entry) => entry.id !== noteId);
-  writeJson(`notes-${subjectId}`, filtered);
+  saveNotes(subjectId, filtered);
   localStorage.removeItem(`note-${subjectId}-${noteId}`);
 };
 

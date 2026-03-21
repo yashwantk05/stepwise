@@ -1,19 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { listSubjects, createSubject, deleteSubject, getSubjectById } from '../services/storage';
+import { Plus } from 'lucide-react';
+import { listSubjects, createSubject, deleteSubject } from '../services/storage';
 
-const formatDate = (time: number) => new Date(time).toLocaleString();
+const formatDate = (time: number) => new Date(time).toLocaleDateString();
 
 interface WhiteboardPageProps {
   onOpenSubject: (subjectId: string) => void;
 }
 
+interface SubjectRecord {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
 export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
-  const [subjects, setSubjects] = useState<any[]>([]);
+  const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
   const [subjectName, setSubjectName] = useState('');
   const [loading, setLoading] = useState(false);
 
   const loadSubjects = useCallback(async () => {
-    const data = await listSubjects();
+    const data = (await listSubjects()) as SubjectRecord[];
     setSubjects(data);
   }, []);
 
@@ -36,8 +43,8 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
   };
 
   const handleDeleteSubject = async (subjectId: string, name: string) => {
-    if (!window.confirm(`Delete subject "${name}"? This will remove all related assignments.`)) return;
-    
+    if (!window.confirm(`Delete subject "${name}"? This will remove all related assignments and notes.`)) return;
+
     setLoading(true);
     try {
       await deleteSubject(subjectId);
@@ -52,12 +59,32 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
       <div className="welcome-section">
         <p className="eyebrow">AI Whiteboard</p>
         <h1>My Subjects</h1>
-        <p>Create subjects and manage your problem-solving assignments</p>
+        <p>Create subjects and manage your problem-solving assignments.</p>
       </div>
 
-      <div>
+      <div className="form-section mb-3">
+        <h2>Create New Subject</h2>
+        <form onSubmit={handleCreateSubject} className="form-row">
+          <input
+            type="text"
+            value={subjectName}
+            onChange={(e) => setSubjectName(e.target.value)}
+            placeholder="Subject name (e.g., Calculus, Physics)"
+            disabled={loading}
+          />
+          <button type="submit" className="btn-primary" disabled={loading || !subjectName.trim()}>
+            <Plus size={16} />
+            Create Subject
+          </button>
+        </form>
+      </div>
+
+      <div className="mb-4">
+        <h2 className="mb-2" style={{ fontSize: '20px', fontWeight: 600 }}>
+          My Subjects
+        </h2>
         {subjects.length === 0 ? (
-          <p className="text-muted">No subjects yet. Create your first subject below to get started.</p>
+          <p className="text-muted">No subjects yet. Create your first subject above to get started.</p>
         ) : (
           <div className="cards-grid">
             {subjects.map((subject) => (
@@ -68,9 +95,7 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
                 style={{ cursor: 'pointer' }}
               >
                 <h2>{subject.name}</h2>
-                <p className="text-sm text-muted">
-                  Created: {formatDate(subject.createdAt)}
-                </p>
+                <p className="text-sm text-muted">Created: {formatDate(subject.createdAt)}</p>
                 <div className="card-actions">
                   <button
                     className="btn-sm btn-primary"
@@ -85,7 +110,7 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
                     className="btn-sm btn-danger"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleDeleteSubject(subject.id, subject.name);
+                      void handleDeleteSubject(subject.id, subject.name);
                     }}
                     disabled={loading}
                   >
@@ -96,25 +121,6 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
             ))}
           </div>
         )}
-      </div>
-
-      <div className="form-section mb-3">
-        <h2>Create New Subject</h2>
-        <form onSubmit={handleCreateSubject} className="form-row">
-          <input
-            type="text"
-            value={subjectName}
-            onChange={(e) => setSubjectName(e.target.value)}
-            placeholder="Subject name (e.g., Calculus, Physics)"
-            disabled={loading}
-          />
-          <button type="submit" className="btn-primary" disabled={loading || !subjectName.trim()}>
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M10 5v10M5 10h10" strokeLinecap="round" />
-            </svg>
-            Create Subject
-          </button>
-        </form>
       </div>
     </div>
   );

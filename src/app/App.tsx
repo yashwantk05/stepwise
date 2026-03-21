@@ -7,6 +7,7 @@ import { Topbar } from './components/Topbar';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { WhiteboardPage } from './pages/WhiteboardPage';
+import { MyNotesPage } from './pages/MyNotesPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
 import { ProblemBoardPage } from './pages/ProblemBoardPage';
@@ -14,6 +15,7 @@ import { ProblemBoardPage } from './pages/ProblemBoardPage';
 type Route = 
   | { type: 'dashboard' }
   | { type: 'whiteboard' }
+  | { type: 'notes' }
   | { type: 'subject'; subjectId: string }
   | { type: 'assignment'; subjectId: string; assignmentId: string }
   | { type: 'problem'; subjectId: string; assignmentId: string; problemIndex: number };
@@ -69,6 +71,8 @@ function App() {
       setRoute({ type: 'dashboard' });
     } else if (page === 'whiteboard') {
       setRoute({ type: 'whiteboard' });
+    } else if (page === 'notes') {
+      setRoute({ type: 'notes' });
     }
     if (isCompactLayout) {
       setIsSidebarOpen(false);
@@ -115,6 +119,7 @@ function App() {
 
   const getCurrentPage = () => {
     if (route.type === 'dashboard') return 'dashboard';
+    if (route.type === 'notes') return 'notes';
     return 'whiteboard';
   };
 
@@ -149,6 +154,8 @@ function App() {
         {route.type === 'whiteboard' && (
           <WhiteboardPage onOpenSubject={openSubject} />
         )}
+
+        {route.type === 'notes' && <MyNotesPage />}
         
         {route.type === 'subject' && (
           <SubjectDetailPage

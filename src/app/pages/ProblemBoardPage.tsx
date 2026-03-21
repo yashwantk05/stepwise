@@ -1,0 +1,1269 @@
+import katex from "katex";
+import "katex/dist/katex.min.css";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
+import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+import "@excalidraw/excalidraw/index.css";
+import { analyzeDrawing } from "../services/ai";
+import {
+  getAssignmentById,
+  getProblemContext,
+  getProblemImage,
+  getProblemScene,
+  saveProblemContext,
+  saveProblemImage,
+  saveProblemScene,
+  downloadProblemImageBlob,
+  downloadAssignmentPdfBlob,
+  deleteProblemImage,
+} from "../services/storage";
+
+GlobalWorkerOptions.workerSrc = pdfWorker;
+
+const MIN_PROBLEM_COUNT = 1;
+const MAX_PROBLEM_COUNT = 60;
+const WHITEBOARD_EXPORT_SCALE = 4;
+const WHITEBOARD_MIN_DIMENSION = 1400;
+const PDF_RENDER_SCALE = 2.5;
+const PDF_MAX_WIDTH = 2400;
+const PROBLEM_CROP_SCALE = 2;
+const MAX_HINT_ITEMS = 3;
+const MAX_ERROR_ITEMS = 3;
+const MAX_CALCULATE_RESULTS = 1;
+const MAX_EXPLAIN_RESULTS = 1;
+
+const getDefaultScene = () => ({
+  elements: [],
+  appState: { viewBackgroundColor: "#f8fafc" },
+  files: {},
+});
+
+const WRONG_STEP_MATCHER =
+  /\b(wrong|incorrect|mistake|error|invalid|not correct|don't|do not|avoid)\b/i;
+
+const pickProblemBucket = (value: any, problemIndex: number) => {
+  if (!value) return null;
+  if (Array.isArray(value)) return value[problemIndex - 1] ?? null;
+  if (typeof value === "object") {
+    return value[problemIndex] ?? value[String(problemIndex)] ?? null;
+  }
+  return null;
+};
+
+const extractInsightEntries = (value: any, forcedKind: string | null = null): any[] => {
+  if (!value) return [];
+
+  if (typeof value === "string") {
+    return [{ content: value, kind: forcedKind }];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => extractInsightEntries(entry, forcedKind));
+  }
+
+  if (typeof value === "object") {
+    const hints = value.hints || value.hint || [];
+    const wrong =
+      value.wrongSteps || value.wrongStep || value.wrong || value.errors || value.mistakes || [];
+
+    if (hints.length || wrong.length) {
+      return [
+        ...extractInsightEntries(hints, "hint"),
+        ...extractInsightEntries(wrong, "wrong"),
+      ];
+    }
+
+    const textValue =
+      value.content ||
+      value.text ||
+      value.message ||
+      value.value ||
+      value.description ||
+      "";
+
+    if (textValue) {
+      return [
+        {
+          content: String(textValue),
+          title: value.title || value.label || "",
+          kind: value.kind || value.type || value.category || forcedKind,
+        },
+      ];
+    }
+  }
+
+  return [];
+};
+
+const classifyInsightKind = (entry: any) => {
+  const declaredKind = String(entry.kind || "").toLowerCase();
+  if (declaredKind.includes("hint")) return "hint";
+  if (
+    declaredKind.includes("wrong") ||
+    declaredKind.includes("error") ||
+    declaredKind.includes("mistake")
+  ) {
+    return "wrong";
+  }
+  return WRONG_STEP_MATCHER.test(entry.content) ? "wrong" : "hint";
+};
+
+const parseInsightsForProblem = (assignment: any, problemIndex: number) => {
+  const candidates = [
+    pickProblemBucket(assignment?.insightsByProblem, problemIndex),
+    pickProblemBucket(assignment?.feedbackByProblem, problemIndex),
+    pickProblemBucket(assignment?.hintsByProblem, problemIndex),
+    pickProblemBucket(assignment?.wrongStepsByProblem, problemIndex),
+    pickProblemBucket(assignment?.aiFeedbackByProblem, problemIndex),
+    assignment?.insights,
+    assignment?.feedback,
+  ];
+
+  const parsed = candidates
+    .flatMap((candidate) => extractInsightEntries(candidate))
+    .map((entry) => ({
+      content: String(entry.content || "").trim(),
+      kind: classifyInsightKind(entry),
+      title: String(entry.title || "").trim(),
+    }))
+    .filter((entry) => entry.content.length > 0);
+
+  return parsed.map((entry, index) => ({ id: `insight-${index}`, ...entry }));
+};
+
+const escapeHtml = (value: string) =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const LATEX_SEGMENT_PATTERN =
+  /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)/g;
+
+const renderMathSegment = (segment: string) => {
+  let expression = segment;
+  let displayMode = false;
+
+  if (segment.startsWith("$$") && segment.endsWith("$$")) {
+    expression = segment.slice(2, -2);
+    displayMode = true;
+  } else if (segment.startsWith("\\[") && segment.endsWith("\\]")) {
+    expression = segment.slice(2, -2);
+    displayMode = true;
+  } else if (segment.startsWith("\\(") && segment.endsWith("\\)")) {
+    expression = segment.slice(2, -2);
+  } else if (segment.startsWith("$") && segment.endsWith("$")) {
+    expression = segment.slice(1, -1);
+  }
+
+  try {
+    return katex.renderToString(expression.trim(), {
+      displayMode,
+      throwOnError: false,
+      strict: "ignore",
+    });
+  } catch {
+    return escapeHtml(segment);
+  }
+};
+
+const renderLatexTextToHtml = (value: string) => {
+  const source = String(value || "");
+  let html = "";
+  let cursor = 0;
+
+  for (const match of source.matchAll(LATEX_SEGMENT_PATTERN)) {
+    const [segment] = match;
+    const index = match.index ?? 0;
+
+    if (index > cursor) {
+      html += escapeHtml(source.slice(cursor, index)).replace(/\n/g, "<br/>");
+    }
+
+    html += renderMathSegment(segment);
+    cursor = index + segment.length;
+  }
+
+  if (cursor < source.length) {
+    html += escapeHtml(source.slice(cursor)).replace(/\n/g, "<br/>");
+  }
+
+  return html;
+};
+
+const LatexText = ({ text, as: Element = "span", className = "" }: { text: string; as?: any; className?: string }) => (
+  <Element
+    className={className}
+    dangerouslySetInnerHTML={{
+      __html: renderLatexTextToHtml(text),
+    }}
+  />
+);
+
+const deriveInsightsFromAiResult = (result: any, requestedMode: string) => {
+  const entries: any[] = [];
+
+  const toEntries = (items: any, kind: string) =>
+    Array.isArray(items)
+      ? items
+          .map((item) => String(item || "").trim())
+          .filter(Boolean)
+          .map((content) => ({ kind, content }))
+      : [];
+
+  entries.push(...toEntries(result?.hints, "hint"));
+  entries.push(...toEntries(result?.errors || result?.wrong || result?.mistakes, "wrong"));
+
+  const directMessage =
+    result?.explanation ||
+    result?.hint ||
+    result?.result ||
+    result?.message ||
+    result?.answer ||
+    result?.value ||
+    "";
+
+  if (String(directMessage).trim() && requestedMode !== "calculate") {
+    entries.push({
+      kind: "hint",
+      content: String(directMessage).trim(),
+    });
+  }
+
+  return entries.map((entry, index) => ({
+    id: "ai-" + Date.now() + "-" + index,
+    kind: entry.kind,
+    content: entry.content,
+  }));
+};
+
+const readCalcValueFromAiResult = (result: any) => {
+  const raw = result?.value || result?.answer || result?.result || result?.message || "";
+  return String(raw || "").trim();
+};
+
+const readExplainTextFromAiResult = (result: any) => {
+  const raw = result?.explanation || result?.hint || result?.message || result?.result || "";
+  return String(raw || "").trim();
+};
+
+const getPersistedScene = (scene: any) => {
+  const normalizedElements = Array.isArray(scene?.elements) ? scene.elements : [];
+  const normalizedFiles =
+    scene?.files && typeof scene.files === "object" && !Array.isArray(scene.files)
+      ? scene.files
+      : {};
+  const viewBackgroundColor =
+    typeof scene?.appState?.viewBackgroundColor === "string"
+      ? scene.appState.viewBackgroundColor
+      : "#f8fafc";
+
+  return {
+    elements: normalizedElements,
+    appState: { viewBackgroundColor },
+    files: normalizedFiles,
+  };
+};
+
+const formatDate = (time: number) => new Date(time).toLocaleString();
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const normalizeProblemCount = (value: number) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return MIN_PROBLEM_COUNT;
+  return clamp(parsed, MIN_PROBLEM_COUNT, MAX_PROBLEM_COUNT);
+};
+
+const mergeLimitedInsights = (previous: any[], incoming: any[]) => {
+  const merged = [...previous, ...incoming];
+  let hintCount = 0;
+  let errorCount = 0;
+  const retainedIndexes = new Set();
+
+  for (let index = merged.length - 1; index >= 0; index -= 1) {
+    const entry = merged[index];
+    if (entry.kind === "wrong") {
+      if (errorCount >= MAX_ERROR_ITEMS) continue;
+      errorCount += 1;
+      retainedIndexes.add(index);
+      continue;
+    }
+
+    if (hintCount >= MAX_HINT_ITEMS) continue;
+    hintCount += 1;
+    retainedIndexes.add(index);
+  }
+
+  return merged.filter((_, index) => retainedIndexes.has(index));
+};
+
+const upscaleCanvasToMinDimension = (canvas: HTMLCanvasElement, minDimension = WHITEBOARD_MIN_DIMENSION) => {
+  const maxDimension = Math.max(canvas.width, canvas.height);
+  if (!maxDimension || maxDimension >= minDimension) return canvas;
+
+  const scale = minDimension / maxDimension;
+  if (scale <= 1) return canvas;
+
+  const scaledCanvas = document.createElement("canvas");
+  scaledCanvas.width = Math.round(canvas.width * scale);
+  scaledCanvas.height = Math.round(canvas.height * scale);
+  const context = scaledCanvas.getContext("2d");
+  if (!context) return canvas;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(canvas, 0, 0, scaledCanvas.width, scaledCanvas.height);
+  return scaledCanvas;
+};
+
+const createCroppedImageBlob = async (sourceUrl: string, cropArea: any) => {
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const nextImage = new Image();
+    nextImage.onload = () => resolve(nextImage);
+    nextImage.onerror = () => reject(new Error("Unable to load rendered PDF page."));
+    nextImage.src = sourceUrl;
+  });
+
+  const width = clamp(Math.round(cropArea.width), 1, image.naturalWidth);
+  const height = clamp(Math.round(cropArea.height), 1, image.naturalHeight);
+  const x = clamp(Math.round(cropArea.x), 0, image.naturalWidth - width);
+  const y = clamp(Math.round(cropArea.y), 0, image.naturalHeight - height);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width * PROBLEM_CROP_SCALE;
+  canvas.height = height * PROBLEM_CROP_SCALE;
+
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Unable to initialize image crop context.");
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(
+    image,
+    x,
+    y,
+    width,
+    height,
+    0,
+    0,
+    width * PROBLEM_CROP_SCALE,
+    height * PROBLEM_CROP_SCALE,
+  );
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) throw new Error("Unable to export cropped problem image.");
+  return blob;
+};
+
+interface ProblemBoardPageProps {
+  subjectId: string;
+  assignmentId: string;
+  problemIndex: number;
+  onBack: () => void;
+}
+
+export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: ProblemBoardPageProps) {
+  const [assignment, setAssignment] = useState<any>(null);
+  const [status, setStatus] = useState("Loading whiteboard...");
+  const [, setHint] = useState("Start drawing to receive hints.");
+  const [initialScene, setInitialScene] = useState(getDefaultScene());
+  const latestSceneRef = useRef(getDefaultScene());
+  const insights = useMemo(
+    () => parseInsightsForProblem(assignment, problemIndex),
+    [assignment, problemIndex],
+  );
+  const [manualInsights, setManualInsights] = useState<any[]>([]);
+  const combinedInsights = useMemo(
+    () => [...insights, ...manualInsights],
+    [insights, manualInsights],
+  );
+  const hintInsights = useMemo(
+    () => combinedInsights.filter((entry) => entry.kind === "hint").slice(-MAX_HINT_ITEMS),
+    [combinedInsights],
+  );
+  const wrongInsights = useMemo(
+    () => combinedInsights.filter((entry) => entry.kind === "wrong").slice(-MAX_ERROR_ITEMS),
+    [combinedInsights],
+  );
+  const [sceneRevision, setSceneRevision] = useState(0);
+  const [problemImageMeta, setProblemImageMeta] = useState<any>(null);
+  const [problemImageUrl, setProblemImageUrl] = useState("");
+  const [problemContextMeta, setProblemContextMeta] = useState<any>(null);
+  const [answerKeyDraft, setAnswerKeyDraft] = useState("");
+  const [isSavingAnswerKey, setIsSavingAnswerKey] = useState(false);
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerStatus, setPickerStatus] = useState("");
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  const [selectedPage, setSelectedPage] = useState(1);
+  const [pageImageUrl, setPageImageUrl] = useState("");
+  const [selectionRect, setSelectionRect] = useState<any>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [isRenderingPage, setIsRenderingPage] = useState(false);
+  const [isSavingProblemImage, setIsSavingProblemImage] = useState(false);
+  const [selectionMode, setSelectionMode] = useState<string | null>(null);
+  const [boardSelectionRect, setBoardSelectionRect] = useState<any>(null);
+  const [isBoardSelecting, setIsBoardSelecting] = useState(false);
+  const [isAiSelecting, setIsAiSelecting] = useState(false);
+  const [selectionResults, setSelectionResults] = useState<any[]>([]);
+  const [isStylePanelOpen, setIsStylePanelOpen] = useState(true);
+  const analyzeTimerRef = useRef<any>(null);
+  const lastSnapshotRef = useRef<string | null>(null);
+  const pdfDocumentRef = useRef<any>(null);
+  const problemImageUrlRef = useRef("");
+  const pageImageUrlRef = useRef("");
+  const cropImageRef = useRef<HTMLImageElement>(null);
+  const dragStartRef = useRef<any>(null);
+  const whiteboardAreaRef = useRef<HTMLDivElement>(null);
+  const boardSelectionStartRef = useRef<any>(null);
+  const hintLevelRef = useRef(1);
+  const previousHintsRef = useRef<string[]>([]);
+
+  const clearProblemImageUrl = useCallback(() => {
+    if (!problemImageUrlRef.current) return;
+    URL.revokeObjectURL(problemImageUrlRef.current);
+    problemImageUrlRef.current = "";
+    setProblemImageUrl("");
+  }, []);
+
+  const clearPageImageUrl = useCallback(() => {
+    if (!pageImageUrlRef.current) return;
+    URL.revokeObjectURL(pageImageUrlRef.current);
+    pageImageUrlRef.current = "";
+    setPageImageUrl("");
+  }, []);
+
+  const loadProblemImage = useCallback(async () => {
+    const metadata = await getProblemImage(assignmentId, problemIndex);
+    if (!metadata) {
+      setProblemImageMeta(null);
+      clearProblemImageUrl();
+      return;
+    }
+
+    const blob = await downloadProblemImageBlob(assignmentId, problemIndex);
+    const objectUrl = URL.createObjectURL(blob);
+    if (problemImageUrlRef.current) {
+      URL.revokeObjectURL(problemImageUrlRef.current);
+    }
+    problemImageUrlRef.current = objectUrl;
+    setProblemImageMeta(metadata);
+    setProblemImageUrl(objectUrl);
+  }, [assignmentId, clearProblemImageUrl, problemIndex]);
+
+  const loadProblemContext = useCallback(async () => {
+    const context = await getProblemContext(assignmentId, problemIndex);
+    setProblemContextMeta(context);
+    setAnswerKeyDraft(context?.answerKey || "");
+  }, [assignmentId, problemIndex]);
+
+  const closePicker = useCallback(() => {
+    setIsPickerOpen(false);
+    setPickerStatus("");
+    setPdfPageCount(0);
+    setSelectedPage(1);
+    setSelectionRect(null);
+    setIsSelecting(false);
+    clearPageImageUrl();
+
+    const currentPdf = pdfDocumentRef.current;
+    pdfDocumentRef.current = null;
+    if (currentPdf?.destroy) {
+      void currentPdf.destroy();
+    }
+  }, [clearPageImageUrl]);
+
+  const renderSelectedPage = useCallback(
+    async (pdfDocument: any, pageNumber: number) => {
+      setIsRenderingPage(true);
+      try {
+        const page = await pdfDocument.getPage(pageNumber);
+        const initialViewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+        const boundedScale =
+          initialViewport.width > PDF_MAX_WIDTH
+            ? PDF_RENDER_SCALE * (PDF_MAX_WIDTH / initialViewport.width)
+            : PDF_RENDER_SCALE;
+        const viewport = page.getViewport({ scale: boundedScale });
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) {
+          throw new Error("Unable to initialize PDF rendering context.");
+        }
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        await page.render({ canvasContext: context, viewport }).promise;
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) {
+          throw new Error("Unable to render selected page.");
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        if (pageImageUrlRef.current) {
+          URL.revokeObjectURL(pageImageUrlRef.current);
+        }
+        pageImageUrlRef.current = objectUrl;
+        setPageImageUrl(objectUrl);
+        setSelectionRect(null);
+        setIsSelecting(false);
+        setPickerStatus(`Page ${pageNumber} ready. Drag on the image to select a crop area.`);
+      } finally {
+        setIsRenderingPage(false);
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const loadData = async () => {
+      const target = await getAssignmentById(assignmentId);
+      setAssignment(target);
+      const assignmentProblemCount = normalizeProblemCount(target.problemCount);
+      if (problemIndex > assignmentProblemCount) {
+        setInitialScene(getDefaultScene());
+        setSceneRevision((revision) => revision + 1);
+        latestSceneRef.current = getDefaultScene();
+        setHint("Start drawing to receive hints.");
+        lastSnapshotRef.current = null;
+        hintLevelRef.current = 1;
+        previousHintsRef.current = [];
+        setStatus(`Problem ${problemIndex} does not exist in this assignment.`);
+        setProblemImageMeta(null);
+        clearProblemImageUrl();
+        return;
+      }
+
+      const storedScene = await getProblemScene(assignmentId, problemIndex);
+      await loadProblemContext();
+      const scene = getPersistedScene(storedScene?.scene || getDefaultScene());
+      setInitialScene(scene);
+      setSceneRevision((revision) => revision + 1);
+      latestSceneRef.current = scene;
+      setHint("Start drawing to receive hints.");
+      lastSnapshotRef.current = null;
+      hintLevelRef.current = 1;
+      previousHintsRef.current = [];
+      setStatus(
+        storedScene
+          ? `Last saved ${formatDate(storedScene.updatedAt)}.`
+          : "No saved drawing yet.",
+      );
+      await loadProblemImage();
+    };
+
+    loadData().catch(() => setStatus("Unable to load whiteboard."));
+  }, [assignmentId, clearProblemImageUrl, loadProblemContext, loadProblemImage, problemIndex]);
+
+  const blobToBase64 = useCallback(
+    (blob: Blob) =>
+      new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      }),
+    [],
+  );
+
+  const analyzeSceneForHint = useCallback(
+    async (elements: any, appState: any, files: any) => {
+      if (elements.length === 0) {
+        setHint("Start drawing to receive hints.");
+        return;
+      }
+
+      const canvas = await exportToCanvas({
+        elements,
+        appState,
+        files,
+        exportScale: WHITEBOARD_EXPORT_SCALE,
+      });
+
+      const exportCanvas = upscaleCanvasToMinDimension(canvas);
+
+      const blob = await new Promise<Blob | null>((resolve) => exportCanvas.toBlob(resolve, "image/png"));
+      if (!blob) return;
+
+      const base64 = await blobToBase64(blob);
+      if (base64 === lastSnapshotRef.current) return;
+      lastSnapshotRef.current = base64;
+
+      setHint("Generating hint...");
+      try {
+        const result = await analyzeDrawing(blob, {
+          assignmentId,
+          problemIndex,
+          problemImageUrl,
+          hintLevel: hintLevelRef.current,
+          previousHints: previousHintsRef.current,
+        });
+
+        const nextInsights = deriveInsightsFromAiResult(result, "explain");
+        const newHintTexts = nextInsights
+          .filter((e: any) => e.kind === "hint")
+          .map((e: any) => e.content);
+        if (newHintTexts.length > 0) {
+          previousHintsRef.current = [...previousHintsRef.current, ...newHintTexts].slice(-5);
+          hintLevelRef.current = Math.min(4, hintLevelRef.current + 1);
+        }
+        if (nextInsights.length > 0) {
+          setManualInsights((previous) => mergeLimitedInsights(previous, nextInsights));
+        }
+
+        setHint("AI feedback updated.");
+      } catch {
+        setHint("Hint service unavailable.");
+      }
+    },
+    [assignmentId, blobToBase64, problemImageUrl, problemIndex],
+  );
+
+  const handleChange = useCallback((elements: any, appState: any, files: any) => {
+    latestSceneRef.current = getPersistedScene({ elements, appState, files });
+    if (analyzeTimerRef.current) {
+      window.clearTimeout(analyzeTimerRef.current);
+    }
+    analyzeTimerRef.current = window.setTimeout(() => {
+      void analyzeSceneForHint(elements, appState, files);
+    }, 3000);
+  }, [analyzeSceneForHint]);
+
+  useEffect(
+    () => () => {
+      if (analyzeTimerRef.current) {
+        window.clearTimeout(analyzeTimerRef.current);
+      }
+
+      if (problemImageUrlRef.current) {
+        URL.revokeObjectURL(problemImageUrlRef.current);
+        problemImageUrlRef.current = "";
+      }
+      if (pageImageUrlRef.current) {
+        URL.revokeObjectURL(pageImageUrlRef.current);
+        pageImageUrlRef.current = "";
+      }
+      const currentPdf = pdfDocumentRef.current;
+      pdfDocumentRef.current = null;
+      if (currentPdf?.destroy) {
+        void currentPdf.destroy();
+      }
+    },
+    [],
+  );
+
+  const handleSave = async () => {
+    await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
+    setStatus(`Saved at ${new Date().toLocaleTimeString()}.`);
+  };
+
+  const handleOpenPicker = async () => {
+    setIsPickerOpen(true);
+    setPickerStatus("Loading PDF...");
+    try {
+      const pdfBlob = await downloadAssignmentPdfBlob(assignmentId);
+      const bytes = await pdfBlob.arrayBuffer();
+      const loadingTask = getDocument({ data: new Uint8Array(bytes) });
+      const pdfDocument = await loadingTask.promise;
+      pdfDocumentRef.current = pdfDocument;
+      setPdfPageCount(pdfDocument.numPages);
+      setSelectedPage(1);
+      await renderSelectedPage(pdfDocument, 1);
+    } catch {
+      setPickerStatus("Unable to open PDF. Upload a PDF first.");
+    }
+  };
+
+  const handleSaveAnswerKey = async () => {
+    setIsSavingAnswerKey(true);
+    try {
+      const saved = await saveProblemContext(assignmentId, problemIndex, {
+        answerKey: answerKeyDraft,
+      });
+      setProblemContextMeta(saved);
+      setAnswerKeyDraft(saved?.answerKey || "");
+      setStatus(`Saved answer key at ${new Date().toLocaleTimeString()}.`);
+    } finally {
+      setIsSavingAnswerKey(false);
+    }
+  };
+
+  const handlePageChange = async (value: string) => {
+    const nextPage = clamp(Number(value) || 1, 1, pdfPageCount || 1);
+    setSelectedPage(nextPage);
+    if (pdfDocumentRef.current) {
+      await renderSelectedPage(pdfDocumentRef.current, nextPage);
+    }
+  };
+
+  const handleSaveProblemImage = async () => {
+    if (!pageImageUrl || !selectionRect || !cropImageRef.current) {
+      setPickerStatus("Drag to select a crop area first.");
+      return;
+    }
+
+    setIsSavingProblemImage(true);
+    try {
+      const imageElement = cropImageRef.current;
+      const renderedWidth = imageElement.clientWidth;
+      const renderedHeight = imageElement.clientHeight;
+      if (!renderedWidth || !renderedHeight) {
+        throw new Error("Unable to read selected image dimensions.");
+      }
+
+      const scaleX = imageElement.naturalWidth / renderedWidth;
+      const scaleY = imageElement.naturalHeight / renderedHeight;
+      const cropAreaPixels = {
+        x: selectionRect.x * scaleX,
+        y: selectionRect.y * scaleY,
+        width: selectionRect.width * scaleX,
+        height: selectionRect.height * scaleY,
+      };
+
+      const croppedBlob = await createCroppedImageBlob(pageImageUrl, cropAreaPixels);
+      const imageFile = new File([croppedBlob], `problem-${problemIndex}.png`, {
+        type: "image/png",
+      });
+      await saveProblemImage(assignmentId, problemIndex, imageFile);
+      await loadProblemImage();
+      closePicker();
+      setStatus(`Saved problem image and refreshed context at ${new Date().toLocaleTimeString()}.`);
+    } catch {
+      setPickerStatus("Unable to save cropped image.");
+    } finally {
+      setIsSavingProblemImage(false);
+    }
+  };
+
+  const handleSelectionStart = (event: React.PointerEvent) => {
+    if (!cropImageRef.current || !pageImageUrl) return;
+    const imageRect = cropImageRef.current.getBoundingClientRect();
+    const startX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
+    const startY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
+
+    dragStartRef.current = { x: startX, y: startY };
+    setSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
+    setIsSelecting(true);
+    setPickerStatus("Selecting crop area...");
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleSelectionMove = (event: React.PointerEvent) => {
+    if (!isSelecting || !dragStartRef.current || !cropImageRef.current) return;
+    const imageRect = cropImageRef.current.getBoundingClientRect();
+    const nextX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
+    const nextY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
+    const originX = dragStartRef.current.x;
+    const originY = dragStartRef.current.y;
+
+    setSelectionRect({
+      x: Math.min(originX, nextX),
+      y: Math.min(originY, nextY),
+      width: Math.abs(nextX - originX),
+      height: Math.abs(nextY - originY),
+    });
+  };
+
+  const handleSelectionEnd = (event: React.PointerEvent) => {
+    if (!isSelecting) return;
+    setIsSelecting(false);
+    dragStartRef.current = null;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setSelectionRect((currentRect: any) => {
+      if (!currentRect || currentRect.width < 6 || currentRect.height < 6) {
+        setPickerStatus("Selection too small. Drag a larger area.");
+        return null;
+      }
+      setPickerStatus("Selection ready. Save cropped image.");
+      return currentRect;
+    });
+  };
+
+  const appendLimitedInsights = useCallback((incomingInsights: any[]) => {
+    setManualInsights((previous) => mergeLimitedInsights(previous, incomingInsights));
+  }, []);
+
+  const appendLimitedSelectionResult = useCallback((incomingResult: any) => {
+    setSelectionResults((previous) => {
+      const merged = [incomingResult, ...previous];
+      let explainCount = 0;
+      let calculateCount = 0;
+
+      return merged.filter((entry) => {
+        if (entry.mode === "explain") {
+          if (explainCount >= MAX_EXPLAIN_RESULTS) return false;
+          explainCount += 1;
+          return true;
+        }
+
+        if (entry.mode === "calculate") {
+          if (calculateCount >= MAX_CALCULATE_RESULTS) return false;
+          calculateCount += 1;
+          return true;
+        }
+
+        return false;
+      });
+    });
+  }, []);
+
+  const startSelectionTool = (mode: string) => {
+    setSelectionMode(mode);
+    setBoardSelectionRect(null);
+    setHint(
+      mode === "calculate"
+        ? "Draw a blue rectangle to calculate the selected expression."
+        : "Draw a yellow rectangle to explain the selected area.",
+    );
+  };
+
+  const runSelectionAnalysis = useCallback(
+    async (selectionRect: any, mode: string, bounds: any) => {
+      const scene = latestSceneRef.current || getDefaultScene();
+      if (!scene.elements?.length) {
+        setHint("Draw something first, then use a selection tool.");
+        return;
+      }
+
+      setIsAiSelecting(true);
+      try {
+        const exportedCanvas = await exportToCanvas({
+          elements: scene.elements,
+          appState: scene.appState,
+          files: scene.files,
+          exportScale: WHITEBOARD_EXPORT_SCALE,
+        });
+
+        const scaleX = exportedCanvas.width / Math.max(bounds.width, 1);
+        const scaleY = exportedCanvas.height / Math.max(bounds.height, 1);
+        const cropX = Math.max(0, Math.round(selectionRect.x * scaleX));
+        const cropY = Math.max(0, Math.round(selectionRect.y * scaleY));
+        const cropWidth = Math.max(1, Math.round(selectionRect.width * scaleX));
+        const cropHeight = Math.max(1, Math.round(selectionRect.height * scaleY));
+
+        const cropCanvas = document.createElement("canvas");
+        cropCanvas.width = cropWidth;
+        cropCanvas.height = cropHeight;
+        const cropContext = cropCanvas.getContext("2d");
+        if (!cropContext) throw new Error("Unable to crop selection.");
+
+        cropContext.drawImage(
+          exportedCanvas,
+          cropX,
+          cropY,
+          cropWidth,
+          cropHeight,
+          0,
+          0,
+          cropWidth,
+          cropHeight,
+        );
+
+        const exportCropCanvas = upscaleCanvasToMinDimension(cropCanvas);
+        const cropBlob = await new Promise<Blob | null>((resolve) =>
+          exportCropCanvas.toBlob(resolve, "image/png"),
+        );
+        if (!cropBlob) throw new Error("Unable to export selected area.");
+
+        const result = await analyzeDrawing(cropBlob, {
+          assignmentId,
+          problemIndex,
+          problemImageUrl,
+          mode: mode === "calculate" ? "calculate" : "explain",
+        });
+
+        if (mode === "calculate") {
+          const value = readCalcValueFromAiResult(result);
+          if (value) {
+            appendLimitedSelectionResult({ mode: "calculate", value });
+          }
+          appendLimitedInsights(deriveInsightsFromAiResult(result, "calculate"));
+        } else {
+          const text = readExplainTextFromAiResult(result);
+          if (text) {
+            appendLimitedSelectionResult({ mode: "explain", text });
+          }
+          appendLimitedInsights(deriveInsightsFromAiResult(result, "explain"));
+        }
+
+        setHint("Selection analyzed.");
+      } catch {
+        setHint("Selection analysis failed.");
+      } finally {
+        setIsAiSelecting(false);
+      }
+    },
+    [assignmentId, problemImageUrl, problemIndex, appendLimitedSelectionResult, appendLimitedInsights],
+  );
+
+  const handleBoardSelectionStart = (event: React.PointerEvent) => {
+    if (!selectionMode || !whiteboardAreaRef.current) return;
+    const bounds = whiteboardAreaRef.current.getBoundingClientRect();
+    const startX = event.clientX - bounds.left;
+    const startY = event.clientY - bounds.top;
+
+    boardSelectionStartRef.current = { x: startX, y: startY };
+    setBoardSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
+    setIsBoardSelecting(true);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleBoardSelectionMove = (event: React.PointerEvent) => {
+    if (!isBoardSelecting || !boardSelectionStartRef.current || !whiteboardAreaRef.current) return;
+    const bounds = whiteboardAreaRef.current.getBoundingClientRect();
+    const nextX = event.clientX - bounds.left;
+    const nextY = event.clientY - bounds.top;
+    const originX = boardSelectionStartRef.current.x;
+    const originY = boardSelectionStartRef.current.y;
+
+    setBoardSelectionRect({
+      x: Math.min(originX, nextX),
+      y: Math.min(originY, nextY),
+      width: Math.abs(nextX - originX),
+      height: Math.abs(nextY - originY),
+    });
+  };
+
+  const handleBoardSelectionEnd = (event: React.PointerEvent) => {
+    if (!isBoardSelecting || !boardSelectionRect || !whiteboardAreaRef.current) return;
+    setIsBoardSelecting(false);
+    event.currentTarget.releasePointerCapture(event.pointerId);
+
+    if (boardSelectionRect.width < 10 || boardSelectionRect.height < 10) {
+      setBoardSelectionRect(null);
+      setSelectionMode(null);
+      setHint("Selection too small.");
+      return;
+    }
+
+    const bounds = whiteboardAreaRef.current.getBoundingClientRect();
+    void runSelectionAnalysis(boardSelectionRect, selectionMode!, bounds);
+    setBoardSelectionRect(null);
+    setSelectionMode(null);
+  };
+
+  const handleRemoveProblemImage = async () => {
+    await deleteProblemImage(assignmentId, problemIndex);
+    clearProblemImageUrl();
+    setProblemImageMeta(null);
+    setStatus("Removed problem image.");
+  };
+
+  if (!assignment) {
+    return (
+      <div className="app-content">
+        <p>Loading...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Whiteboard</p>
+          <h1>{assignment.title} - Problem {problemIndex}</h1>
+        </div>
+        <div className="topbar-actions">
+          {!selectionMode && (
+            <>
+              <p className="status-pill">{status}</p>
+              <button 
+                type="button" 
+                className="selection-tool-btn selection-tool-btn-blue"
+                onClick={() => startSelectionTool("calculate")}
+              >
+                Calc
+              </button>
+              <button 
+                type="button" 
+                className="selection-tool-btn selection-tool-btn-yellow"
+                onClick={() => startSelectionTool("explain")}
+              >
+                Explain
+              </button>
+              <button type="button" onClick={handleSave} className="btn-primary">
+                Save Drawing
+              </button>
+              <button type="button" className="outline" onClick={onBack}>
+                Back
+              </button>
+            </>
+          )}
+          {selectionMode && (
+            <>
+              <p className="subtle" style={{ fontSize: '0.85rem', maxWidth: '400px' }}>
+                For Calc/Explain, first choose the tool, then drag on the whiteboard to select a portion.
+              </p>
+              <button
+                type="button"
+                className={`selection-tool-btn selection-tool-btn-blue ${
+                  selectionMode === "calculate" ? "selection-tool-btn-active" : ""
+                }`}
+                onClick={() => startSelectionTool("calculate")}
+              >
+                Calc
+              </button>
+              <button
+                type="button"
+                className={`selection-tool-btn selection-tool-btn-yellow ${
+                  selectionMode === "explain" ? "selection-tool-btn-active" : ""
+                }`}
+                onClick={() => startSelectionTool("explain")}
+              >
+                Explain
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectionMode(null);
+                  setBoardSelectionRect(null);
+                  setHint("Selection tool closed.");
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      </header>
+
+      <section className="panel">
+        <h2>Problem Image</h2>
+        <div className="control-row">
+          <button type="button" onClick={handleOpenPicker}>
+            Replace from PDF
+          </button>
+          {problemImageMeta && (
+            <>
+              <button type="button" className="danger" onClick={handleRemoveProblemImage}>
+                Remove Image
+              </button>
+              <p className="subtle" style={{ margin: 0 }}>
+                Updated {formatDate(problemImageMeta.updatedAt)}
+              </p>
+            </>
+          )}
+        </div>
+        {problemImageUrl && (
+          <img
+            src={problemImageUrl}
+            alt="Problem context"
+            className="problem-image-preview"
+          />
+        )}
+        {!problemImageUrl && <p className="subtle">No problem image set.</p>}
+      </section>
+
+      <section className="panel">
+        <h2>Answer Key (LaTeX supported)</h2>
+        <div className="answer-key-editor">
+          <textarea
+            id="answer-key"
+            value={answerKeyDraft}
+            onChange={(e) => setAnswerKeyDraft(e.target.value)}
+            placeholder="Enter expected answer or key steps... Use $x^2$ for inline math or $$\frac{1}{2}$$ for display math."
+            rows={3}
+          />
+          <div className="control-row">
+            <button
+              type="button"
+              onClick={handleSaveAnswerKey}
+              disabled={isSavingAnswerKey}
+            >
+              {isSavingAnswerKey ? "Saving..." : "Save Answer Key"}
+            </button>
+          </div>
+          {problemContextMeta?.answerKey && (
+            <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac' }}>
+              <p className="subtle" style={{ marginBottom: '8px' }}>Preview:</p>
+              <LatexText text={problemContextMeta.answerKey} />
+            </div>
+          )}
+        </div>
+      </section>
+
+      <div className="whiteboard-stage">
+        <div
+          ref={whiteboardAreaRef}
+          className={`canvas-area ${isStylePanelOpen ? "" : "style-panel-hidden"}`}
+        >
+          <button
+            type="button"
+            className="style-panel-toggle"
+            onClick={() => setIsStylePanelOpen((prev) => !prev)}
+          >
+            {isStylePanelOpen ? "Hide" : "Show"} Tools
+          </button>
+
+          <Excalidraw
+            key={sceneRevision}
+            initialData={initialScene}
+            onChange={handleChange}
+            UIOptions={{
+              canvasActions: {
+                saveAsImage: false,
+              },
+            }}
+          >
+            <MainMenu>
+              <MainMenu.DefaultItems.SaveAsImage />
+              <MainMenu.DefaultItems.ChangeCanvasBackground />
+              <MainMenu.DefaultItems.ClearCanvas />
+            </MainMenu>
+          </Excalidraw>
+
+          {selectionMode && (
+            <div
+              className={`ai-select-layer ${
+                selectionMode === "calculate"
+                  ? "ai-select-layer-calculate"
+                  : "ai-select-layer-explain"
+              }`}
+              onPointerDown={handleBoardSelectionStart}
+              onPointerMove={handleBoardSelectionMove}
+              onPointerUp={handleBoardSelectionEnd}
+            >
+              {boardSelectionRect && (
+                <div
+                  className="ai-select-rect"
+                  style={{
+                    left: boardSelectionRect.x,
+                    top: boardSelectionRect.y,
+                    width: boardSelectionRect.width,
+                    height: boardSelectionRect.height,
+                  }}
+                />
+              )}
+            </div>
+          )}
+
+          {isAiSelecting && (
+            <div
+              className="ai-calc-pill ai-calc-pill-calculate"
+              style={{ top: "50%", left: "50%", transform: "translate(-50%, -50%)" }}
+            >
+              Analyzing...
+            </div>
+          )}
+        </div>
+
+        <aside className="insights-rail">
+          <button type="button" className="insights-tab">
+            AI Study Buddy
+          </button>
+
+          <div className="insights-panel">
+            <h2>Insights</h2>
+
+            {selectionResults.length > 0 && (
+              <div className="selection-results">
+                {selectionResults.map((result, index) => (
+                  <div
+                    key={index}
+                    className={`selection-result-card selection-result-card-${result.mode}`}
+                  >
+                    {result.mode === "calculate" && <div>Result: {result.value}</div>}
+                    {result.mode === "explain" && <LatexText text={result.text} />}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {hintInsights.length > 0 && (
+              <div className="insight-group">
+                <h3>💡 Hints</h3>
+                {hintInsights.map((insight) => (
+                  <details key={insight.id} className="insight-item insight-item-hint">
+                    <summary>{insight.title || "Hint"}</summary>
+                    <LatexText text={insight.content} as="p" />
+                  </details>
+                ))}
+              </div>
+            )}
+
+            {wrongInsights.length > 0 && (
+              <div className="insight-group">
+                <h3>⚠️ Errors</h3>
+                {wrongInsights.map((insight) => (
+                  <details key={insight.id} className="insight-item insight-item-wrong">
+                    <summary>{insight.title || "Watch Out"}</summary>
+                    <LatexText text={insight.content} as="p" />
+                  </details>
+                ))}
+              </div>
+            )}
+
+            {hintInsights.length === 0 && wrongInsights.length === 0 && selectionResults.length === 0 && (
+              <p className="ai-buddy-status">Start drawing to receive AI feedback.</p>
+            )}
+          </div>
+        </aside>
+      </div>
+
+      {isPickerOpen && (
+        <div className="modal-overlay" onClick={closePicker}>
+          <div className="panel picker-panel" onClick={(e) => e.stopPropagation()}>
+            <h2>Select Problem from PDF</h2>
+            <p className="subtle">{pickerStatus}</p>
+
+            <div className="control-row">
+              <label className="picker-label">
+                Page:
+                <input
+                  type="number"
+                  min={1}
+                  max={pdfPageCount || 1}
+                  value={selectedPage}
+                  onChange={(e) => void handlePageChange(e.target.value)}
+                  disabled={isRenderingPage}
+                />
+              </label>
+              <span className="subtle">of {pdfPageCount}</span>
+            </div>
+
+            {pageImageUrl && (
+              <div className="picker-crop-shell">
+                <div
+                  className="picker-image-stage"
+                  onPointerDown={handleSelectionStart}
+                  onPointerMove={handleSelectionMove}
+                  onPointerUp={handleSelectionEnd}
+                >
+                  <img
+                    ref={cropImageRef}
+                    src={pageImageUrl}
+                    alt={`Page ${selectedPage}`}
+                    className="picker-crop-image"
+                  />
+                  {selectionRect && (
+                    <div
+                      className="picker-selection"
+                      style={{
+                        left: selectionRect.x,
+                        top: selectionRect.y,
+                        width: selectionRect.width,
+                        height: selectionRect.height,
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="control-row">
+              <button
+                type="button"
+                onClick={handleSaveProblemImage}
+                disabled={isSavingProblemImage || !selectionRect}
+              >
+                {isSavingProblemImage ? "Saving..." : "Save Cropped Image"}
+              </button>
+              <button type="button" className="outline" onClick={closePicker}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

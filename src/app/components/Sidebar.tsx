@@ -68,7 +68,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
 
         <button
           className={`nav-item ${currentPage === 'notes' ? 'active' : ''}`}
-          onClick={() => onNavigate('notes')}
+          onClick={() => handleNavigate('notes')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">

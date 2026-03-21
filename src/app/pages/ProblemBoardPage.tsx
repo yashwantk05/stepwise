@@ -415,6 +415,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const pageImageUrlRef = useRef("");
   const cropImageRef = useRef<HTMLImageElement>(null);
   const dragStartRef = useRef<any>(null);
+  const selectionPointerIdRef = useRef<number | null>(null);
   const whiteboardAreaRef = useRef<HTMLDivElement>(null);
   const boardSelectionStartRef = useRef<any>(null);
   const hintLevelRef = useRef(1);
@@ -733,21 +734,61 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     }
   };
 
-  const handleSelectionStart = (event: React.PointerEvent) => {
+  const finalizeSelection = useCallback(
+    (
+      currentTarget?: (EventTarget & HTMLDivElement) | null,
+      pointerId?: number,
+    ) => {
+      if (!isSelecting && !dragStartRef.current) return;
+
+      setIsSelecting(false);
+      dragStartRef.current = null;
+      selectionPointerIdRef.current = null;
+
+      if (
+        currentTarget &&
+        pointerId != null &&
+        typeof currentTarget.hasPointerCapture === "function" &&
+        currentTarget.hasPointerCapture(pointerId)
+      ) {
+        currentTarget.releasePointerCapture(pointerId);
+      }
+
+      setSelectionRect((currentRect: any) => {
+        if (!currentRect || currentRect.width < 6 || currentRect.height < 6) {
+          setPickerStatus("Selection too small. Drag a larger area.");
+          return null;
+        }
+        setPickerStatus("Selection ready. Save cropped image.");
+        return currentRect;
+      });
+    },
+    [isSelecting],
+  );
+
+  const handleSelectionStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
     if (!cropImageRef.current || !pageImageUrl) return;
     const imageRect = cropImageRef.current.getBoundingClientRect();
     const startX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
     const startY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
 
     dragStartRef.current = { x: startX, y: startY };
+    selectionPointerIdRef.current = event.pointerId;
     setSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
     setIsSelecting(true);
     setPickerStatus("Selecting crop area...");
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const handleSelectionMove = (event: React.PointerEvent) => {
+  const handleSelectionMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!isSelecting || !dragStartRef.current || !cropImageRef.current) return;
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    if ((event.buttons & 1) !== 1) {
+      finalizeSelection(event.currentTarget, event.pointerId);
+      return;
+    }
+
     const imageRect = cropImageRef.current.getBoundingClientRect();
     const nextX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
     const nextY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
@@ -762,19 +803,14 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     });
   };
 
-  const handleSelectionEnd = (event: React.PointerEvent) => {
-    if (!isSelecting) return;
-    setIsSelecting(false);
-    dragStartRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    setSelectionRect((currentRect: any) => {
-      if (!currentRect || currentRect.width < 6 || currentRect.height < 6) {
-        setPickerStatus("Selection too small. Drag a larger area.");
-        return null;
-      }
-      setPickerStatus("Selection ready. Save cropped image.");
-      return currentRect;
-    });
+  const handleSelectionEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    finalizeSelection(event.currentTarget, event.pointerId);
+  };
+
+  const handleSelectionCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    finalizeSelection(event.currentTarget, event.pointerId);
   };
 
   const appendLimitedInsights = useCallback((incomingInsights: any[]) => {
@@ -1227,6 +1263,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                   onPointerDown={handleSelectionStart}
                   onPointerMove={handleSelectionMove}
                   onPointerUp={handleSelectionEnd}
+                  onPointerCancel={handleSelectionCancel}
                 >
                   <img
                     ref={cropImageRef}

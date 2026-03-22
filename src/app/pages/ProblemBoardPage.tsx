@@ -739,7 +739,8 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       currentTarget?: (EventTarget & HTMLDivElement) | null,
       pointerId?: number,
     ) => {
-      if (!isSelecting && !dragStartRef.current) return;
+      const activePointerId = selectionPointerIdRef.current;
+      if (!isSelecting && !dragStartRef.current && activePointerId == null) return;
 
       setIsSelecting(false);
       dragStartRef.current = null;
@@ -748,10 +749,15 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       if (
         currentTarget &&
         pointerId != null &&
+        activePointerId === pointerId &&
         typeof currentTarget.hasPointerCapture === "function" &&
         currentTarget.hasPointerCapture(pointerId)
       ) {
-        currentTarget.releasePointerCapture(pointerId);
+        try {
+          currentTarget.releasePointerCapture(pointerId);
+        } catch {
+          // Ignore invalid capture release edge cases across browsers.
+        }
       }
 
       setSelectionRect((currentRect: any) => {
@@ -778,7 +784,11 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     setSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
     setIsSelecting(true);
     setPickerStatus("Selecting crop area...");
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail on some devices; dragging still works without it.
+    }
   };
 
   const handleSelectionMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -809,6 +819,11 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   };
 
   const handleSelectionCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    finalizeSelection(event.currentTarget, event.pointerId);
+  };
+
+  const handleSelectionLostCapture = (event: React.PointerEvent<HTMLDivElement>) => {
     if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
     finalizeSelection(event.currentTarget, event.pointerId);
   };
@@ -1264,6 +1279,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                   onPointerMove={handleSelectionMove}
                   onPointerUp={handleSelectionEnd}
                   onPointerCancel={handleSelectionCancel}
+                  onLostPointerCapture={handleSelectionLostCapture}
                 >
                   <img
                     ref={cropImageRef}

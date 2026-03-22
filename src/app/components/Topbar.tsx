@@ -18,6 +18,9 @@ export function Topbar({
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const avatarSrc = String(
+    user?.avatarUrl || user?.avatarURL || user?.photoURL || user?.picture || "",
+  ).trim();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -29,6 +32,10 @@ export function Topbar({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarSrc]);
 
   const getInitials = (name: string) => {
     return name
@@ -54,13 +61,13 @@ export function Topbar({
       <div className="topbar-actions">
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button
-            className={`account-button ${user.avatarUrl && !avatarFailed ? 'account-button-with-photo' : ''}`}
+            className={`account-button ${avatarSrc && !avatarFailed ? 'account-button-with-photo' : ''}`}
             onClick={() => setShowAccountMenu(!showAccountMenu)}
             title={user.name}
           >
-            {user.avatarUrl && !avatarFailed ? (
+            {avatarSrc && !avatarFailed ? (
               <img
-                src={user.avatarUrl}
+                src={avatarSrc}
                 alt={`${user.name} profile`}
                 className="account-avatar-image"
                 referrerPolicy="no-referrer"

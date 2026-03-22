@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, LayoutDashboard, NotebookPen, PanelTopOpen } from 'lucide-react';
+import { AlertTriangle, BarChart3, BrainCircuit, LayoutDashboard, NotebookPen, PanelTopOpen } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: string;
@@ -61,6 +61,22 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
         >
           <span className="nav-icon"><AlertTriangle size={20} /></span>
           Weak Areas
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'progress-analytics' ? 'active' : ''}`}
+          onClick={() => handleNavigate('progress-analytics')}
+        >
+          <span className="nav-icon"><BarChart3 size={20} /></span>
+          Progress Analytics
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'socratic-tutor' ? 'active' : ''}`}
+          onClick={() => handleNavigate('socratic-tutor')}
+        >
+          <span className="nav-icon"><BrainCircuit size={20} /></span>
+          Socratic Tutor
         </button>
 
         <button

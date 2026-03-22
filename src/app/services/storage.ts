@@ -36,6 +36,55 @@ interface AssignmentProblem {
   title: string;
 }
 
+interface ProblemProgressRecord {
+  problemIndex: number;
+  attempted?: boolean;
+  solved?: boolean;
+  mistakeCount?: number;
+  totalTimeSeconds?: number;
+  addTimeSeconds?: number;
+  createdAt?: number | string;
+  updatedAt?: number | string;
+  lastWorkedAt?: number | string;
+  completedAt?: number | string;
+  [key: string]: unknown;
+}
+
+interface NotebookQuizSession {
+  subjectId: string;
+  subjectName?: string;
+  attempted?: boolean;
+  solved?: boolean;
+  totalQuestions?: number;
+  correctCount?: number;
+  mistakeCount?: number;
+  addTimeSeconds?: number;
+  totalTimeSeconds?: number;
+  updatedAt?: number | string;
+  [key: string]: unknown;
+}
+
+interface ErrorSummaryRecord {
+  label?: string;
+  topic?: string;
+  concept?: string;
+  errorType?: string;
+  count?: number;
+  mistakes?: number;
+  total?: number;
+  [key: string]: unknown;
+}
+
+interface ProblemErrorAttemptRecord {
+  id?: string;
+  createdAt?: number | string;
+  summary?: string;
+  errorType?: string;
+  mistakes?: Array<Record<string, unknown>>;
+  items?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
 interface FileRecord {
   fileName: string;
   size: number;
@@ -673,6 +722,27 @@ export const deleteProblemImage = async (assignmentId: string, problemIndex: num
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`, {
     method: "DELETE",
   });
+
+export const getAssignmentProblemProgress = async (
+  assignmentId: string,
+): Promise<ProblemProgressRecord[]> =>
+  (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems/progress`)) as ProblemProgressRecord[];
+
+export const getNotebookQuizSessions = async (): Promise<NotebookQuizSession[]> =>
+  (await request("/notebooks/quiz-sessions")) as NotebookQuizSession[];
+
+export const getErrorSummary = async (
+  groupBy: "topic" | "concept" | "errorType",
+): Promise<ErrorSummaryRecord[]> =>
+  (await request(`/errors/summary?groupBy=${encodeURIComponent(groupBy)}`)) as ErrorSummaryRecord[];
+
+export const getProblemErrors = async (
+  assignmentId: string,
+  problemIndex: number,
+): Promise<ProblemErrorAttemptRecord[]> =>
+  (await request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/errors`,
+  )) as ProblemErrorAttemptRecord[];
 
 const toLocalDateKey = (time: number) => {
   const date = new Date(time);

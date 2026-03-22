@@ -15,6 +15,8 @@ import { DashboardPage } from './pages/DashboardPage';
 import { WhiteboardPage } from './pages/WhiteboardPage';
 import { MyNotesPage } from './pages/MyNotesPage';
 import { WeakAreasPage } from './pages/WeakAreasPage';
+import { ProgressAnalyticsPage } from './pages/ProgressAnalyticsPage';
+import { SocraticTutorPage } from './pages/SocraticTutorPage';
 import { StudyToolPage } from './pages/StudyToolPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
@@ -26,6 +28,8 @@ type Route =
   | { type: 'whiteboard' }
   | { type: 'notes' }
   | { type: 'weak-areas' }
+  | { type: 'progress-analytics' }
+  | { type: 'socratic-tutor'; context?: Record<string, unknown> }
   | { type: 'study-tool'; tool: StudyToolType; subjectId?: string }
   | { type: 'subject'; subjectId: string }
   | { type: 'assignment'; subjectId: string; assignmentId: string }
@@ -103,6 +107,10 @@ function App() {
       setRoute({ type: 'notes' });
     } else if (page === 'weak-areas') {
       setRoute({ type: 'weak-areas' });
+    } else if (page === 'progress-analytics') {
+      setRoute({ type: 'progress-analytics' });
+    } else if (page === 'socratic-tutor') {
+      setRoute({ type: 'socratic-tutor' });
     } else if (page === 'flashcards') {
       setRoute({ type: 'study-tool', tool: 'flashcards' });
     } else if (page === 'quiz') {
@@ -164,6 +172,8 @@ function App() {
     if (route.type === 'dashboard') return 'dashboard';
     if (route.type === 'notes') return 'notes';
     if (route.type === 'weak-areas') return 'weak-areas';
+    if (route.type === 'progress-analytics') return 'progress-analytics';
+    if (route.type === 'socratic-tutor') return 'socratic-tutor';
     if (route.type === 'study-tool') return route.tool;
     return 'whiteboard';
   };
@@ -216,6 +226,12 @@ function App() {
         {route.type === 'notes' && <MyNotesPage onOpenTool={openStudyTool} />}
 
         {route.type === 'weak-areas' && <WeakAreasPage />}
+
+        {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
+
+        {route.type === 'socratic-tutor' && (
+          <SocraticTutorPage initialContext={route.context as any} />
+        )}
 
         {route.type === 'study-tool' && (
           <StudyToolPage

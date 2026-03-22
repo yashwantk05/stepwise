@@ -1554,6 +1554,7 @@ textarea {
   max-width: 100%;
   max-height: min(60vh, 500px);
   user-select: none;
+  -webkit-user-drag: none;
   touch-action: none;
   cursor: crosshair;
 }

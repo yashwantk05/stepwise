@@ -773,8 +773,9 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   );
 
   const handleSelectionStart = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     if (!cropImageRef.current || !pageImageUrl) return;
+    event.preventDefault();
     const imageRect = cropImageRef.current.getBoundingClientRect();
     const startX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
     const startY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
@@ -794,10 +795,11 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const handleSelectionMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!isSelecting || !dragStartRef.current || !cropImageRef.current) return;
     if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
-    if ((event.buttons & 1) !== 1) {
+    if (event.pointerType === "mouse" && (event.buttons & 1) !== 1) {
       finalizeSelection(event.currentTarget, event.pointerId);
       return;
     }
+    event.preventDefault();
 
     const imageRect = cropImageRef.current.getBoundingClientRect();
     const nextX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
@@ -815,6 +817,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
   const handleSelectionEnd = (event: React.PointerEvent<HTMLDivElement>) => {
     if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    event.preventDefault();
     finalizeSelection(event.currentTarget, event.pointerId);
   };
 
@@ -1286,6 +1289,8 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                     src={pageImageUrl}
                     alt={`Page ${selectedPage}`}
                     className="picker-crop-image"
+                    draggable={false}
+                    onDragStart={(event) => event.preventDefault()}
                   />
                   {selectionRect && (
                     <div

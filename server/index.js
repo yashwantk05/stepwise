@@ -234,6 +234,11 @@ const sanitizeHint = (hint) => {
   return text;
 };
 
+const ERROR_SIGNAL_PATTERN =
+  /\b(error|incorrect|wrong|mistake|mistaken|substituted incorrectly|recheck|recalculate|fix|correction)\b/i;
+
+const classifyHintAsError = (hint) => ERROR_SIGNAL_PATTERN.test(String(hint || "").trim());
+
 const formatProblemContextForHint = (rawContext) => {
   const parsed =
     rawContext && typeof rawContext === "object" && !Array.isArray(rawContext)
@@ -445,6 +450,62 @@ Maximum 2 sentences. Use LaTeX for equations.
       },
     ],
   });
+};
+
+const generateErrorFeedbackWithAzure = async ({
+  problemContext,
+  drawingBuffer,
+  drawingMimeType = "image/png",
+}) => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0,
+    maxTokens: 160,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `
+Check whether the student's selected handwritten math work contains an error.
+
+Problem context:
+${problemContext || "None"}
+
+Return exactly one of these two formats only:
+1. No
+2. Yes: <short error description>
+
+Rules:
+- Only answer "Yes" if there is a clear mathematical error in the written step.
+- Do not provide hints, corrections, next steps, or the final answer.
+- Keep the error description short and specific.
+- Do not return JSON.
+            `.trim(),
+          },
+          createImageUrlPart(drawingBuffer, drawingMimeType),
+        ],
+      },
+    ],
+  });
+
+  const cleaned = String(raw || "").trim();
+  if (/^no\b/i.test(cleaned)) {
+    return { hasError: false, error: "" };
+  }
+
+  const yesMatch = cleaned.match(/^yes\s*:\s*(.+)$/i);
+  if (yesMatch?.[1]) {
+    return {
+      hasError: true,
+      error: normalizeBoundedText(yesMatch[1], MAX_WHY_WRONG_LENGTH) || "There is an error in this step.",
+    };
+  }
+
+  return {
+    hasError: false,
+    error: "",
+  };
 };
 
 const calculateSelectionWithAzure = async ({
@@ -1633,48 +1694,71 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       });
       return response.json({ explanation: raw });
     }
-    const analysisRaw = await interpretStudentStepWithAzure({
+    const formattedContext = formatProblemContextForHint(problemContext);
+    const errorCheck = await generateErrorFeedbackWithAzure({
+      problemContext: formattedContext,
       drawingBuffer: file.buffer,
       drawingMimeType: file.mimetype || "image/png",
-      problemContext,
     });
 
-    let analysis;
-    try {
-      const cleaned = analysisRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
-      analysis = JSON.parse(cleaned);
-    } catch {
-      analysis = { observed_step: "Unreadable" };
-    }
-    const observedStep = String(analysis?.observed_step || "");
-    const normalizedCorrectness = String(analysis?.correctness || "").toLowerCase();
-    const normalizedConfidence = String(analysis?.confidence || "").toLowerCase();
-    if (!normalizedCorrectness) {
-      analysis.correctness = observedStep.toLowerCase() === "unreadable" ? "unclear" : "unclear";
-    }
-    if (!normalizedConfidence) {
-      analysis.confidence = "low";
-    }
+    let analysis = {
+      observed_step: "",
+      correctness: errorCheck.hasError ? "incorrect" : "unclear",
+      confidence: "medium",
+    };
+    let hint = "";
+    let errors = errorCheck.hasError ? [errorCheck.error] : [];
 
-    const formattedContext = formatProblemContextForHint(problemContext);
-    const isUnreadableStep = !observedStep || observedStep.toLowerCase() === "unreadable";
+    if (!errorCheck.hasError) {
+      const analysisRaw = await interpretStudentStepWithAzure({
+        drawingBuffer: file.buffer,
+        drawingMimeType: file.mimetype || "image/png",
+        problemContext,
+      });
 
-    const hintLevel = Math.min(4, Math.max(1, Number(request.body?.hintLevel) || 1));
-    const previousHints = Array.isArray(safeJsonParse(request.body?.previousHints))
-      ? safeJsonParse(request.body.previousHints).slice(0, 5).map(String)
-      : [];
-    const hint = isUnreadableStep
-      ? buildUnreadableHint(problemContext)
-      : await generateHintWithAzure({
-          problemContext: formattedContext,
-          studentAnalysis: analysis,
-          hintLevel,
-          previousHints
-        });
+      try {
+        const cleaned = analysisRaw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+        analysis = JSON.parse(cleaned);
+      } catch {
+        analysis = { observed_step: "Unreadable", correctness: "unclear", confidence: "low" };
+      }
+
+      const observedStep = String(analysis?.observed_step || "");
+      const normalizedCorrectness = String(analysis?.correctness || "").toLowerCase();
+      const normalizedConfidence = String(analysis?.confidence || "").toLowerCase();
+      if (!normalizedCorrectness) {
+        analysis.correctness = observedStep.toLowerCase() === "unreadable" ? "unclear" : "unclear";
+      }
+      if (!normalizedConfidence) {
+        analysis.confidence = "low";
+      }
+
+      const isUnreadableStep = !observedStep || observedStep.toLowerCase() === "unreadable";
+      const hintLevel = Math.min(4, Math.max(1, Number(request.body?.hintLevel) || 1));
+      const previousHints = Array.isArray(safeJsonParse(request.body?.previousHints))
+        ? safeJsonParse(request.body.previousHints).slice(0, 5).map(String)
+        : [];
+
+      hint = isUnreadableStep
+        ? buildUnreadableHint(problemContext)
+        : await generateHintWithAzure({
+            problemContext: formattedContext,
+            studentAnalysis: analysis,
+            hintLevel,
+            previousHints
+          });
+
+      if (hint && classifyHintAsError(hint)) {
+        errors = [sanitizeHint(hint)];
+        hint = "";
+        analysis.correctness = "incorrect";
+      }
+    }
 
     response.json({
       analysis,
-      hint: sanitizeHint(hint),
+      errors,
+      hint: hint ? sanitizeHint(hint) : "",
       debug: {
         drawingImage: {
           bytes: file.buffer.length,

@@ -30,8 +30,7 @@ const PDF_MAX_WIDTH = 2400;
 const PROBLEM_CROP_SCALE = 2;
 const MAX_HINT_ITEMS = 3;
 const MAX_ERROR_ITEMS = 3;
-const MAX_CALCULATE_RESULTS = 1;
-const MAX_EXPLAIN_RESULTS = 1;
+const MAX_SELECTION_INSIGHT_ITEMS = 1;
 
 const getDefaultScene = () => ({
   elements: [],
@@ -41,6 +40,8 @@ const getDefaultScene = () => ({
 
 const WRONG_STEP_MATCHER =
   /\b(wrong|incorrect|mistake|error|invalid|not correct|don't|do not|avoid)\b/i;
+const ERROR_LIKE_FEEDBACK_MATCHER =
+  /\b(error|incorrect|wrong|mistake|mistaken|substitut(?:e|ed|ing)\s+.*incorrect|recheck|recalculate|fix|correction)\b/i;
 
 const pickProblemBucket = (value: any, problemIndex: number) => {
   if (!value) return null;
@@ -108,6 +109,9 @@ const classifyInsightKind = (entry: any) => {
   }
   return WRONG_STEP_MATCHER.test(entry.content) ? "wrong" : "hint";
 };
+
+const isErrorLikeFeedback = (entry: any) =>
+  ERROR_LIKE_FEEDBACK_MATCHER.test(String(entry?.content || "").trim());
 
 const parseInsightsForProblem = (assignment: any, problemIndex: number) => {
   const candidates = [
@@ -217,16 +221,31 @@ const deriveInsightsFromAiResult = (result: any, requestedMode: string) => {
   entries.push(...toEntries(result?.hints, "hint"));
   entries.push(...toEntries(result?.errors || result?.wrong || result?.mistakes, "wrong"));
 
-  const directMessage =
-    result?.explanation ||
-    result?.hint ||
-    result?.result ||
-    result?.message ||
-    result?.answer ||
-    result?.value ||
-    "";
+  if (requestedMode === "calculate") {
+    const value = String(result?.value || result?.answer || result?.result || result?.message || "").trim();
+    if (value) {
+      entries.push({
+        kind: "calculate",
+        title: "Calculated Result",
+        content: value,
+      });
+    }
+  }
 
-  if (String(directMessage).trim() && requestedMode !== "calculate") {
+  if (requestedMode === "explain") {
+    const explanation = String(result?.explanation || result?.hint || result?.message || result?.result || "").trim();
+    if (explanation) {
+      entries.push({
+        kind: "explain",
+        title: "Explained Selection",
+        content: explanation,
+      });
+    }
+  }
+
+  const directMessage = requestedMode === "hint" ? result?.hint || result?.message || "" : "";
+
+  if (String(directMessage).trim()) {
     entries.push({
       kind: "hint",
       content: String(directMessage).trim(),
@@ -236,18 +255,9 @@ const deriveInsightsFromAiResult = (result: any, requestedMode: string) => {
   return entries.map((entry, index) => ({
     id: "ai-" + Date.now() + "-" + index,
     kind: entry.kind,
+    title: entry.title,
     content: entry.content,
   }));
-};
-
-const readCalcValueFromAiResult = (result: any) => {
-  const raw = result?.value || result?.answer || result?.result || result?.message || "";
-  return String(raw || "").trim();
-};
-
-const readExplainTextFromAiResult = (result: any) => {
-  const raw = result?.explanation || result?.hint || result?.message || result?.result || "";
-  return String(raw || "").trim();
 };
 
 const getPersistedScene = (scene: any) => {
@@ -282,6 +292,8 @@ const mergeLimitedInsights = (previous: any[], incoming: any[]) => {
   const merged = [...previous, ...incoming];
   let hintCount = 0;
   let errorCount = 0;
+  let calculateCount = 0;
+  let explainCount = 0;
   const retainedIndexes = new Set();
 
   for (let index = merged.length - 1; index >= 0; index -= 1) {
@@ -289,6 +301,20 @@ const mergeLimitedInsights = (previous: any[], incoming: any[]) => {
     if (entry.kind === "wrong") {
       if (errorCount >= MAX_ERROR_ITEMS) continue;
       errorCount += 1;
+      retainedIndexes.add(index);
+      continue;
+    }
+
+    if (entry.kind === "calculate") {
+      if (calculateCount >= MAX_SELECTION_INSIGHT_ITEMS) continue;
+      calculateCount += 1;
+      retainedIndexes.add(index);
+      continue;
+    }
+
+    if (entry.kind === "explain") {
+      if (explainCount >= MAX_SELECTION_INSIGHT_ITEMS) continue;
+      explainCount += 1;
       retainedIndexes.add(index);
       continue;
     }
@@ -380,11 +406,20 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     [insights, manualInsights],
   );
   const hintInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "hint").slice(-MAX_HINT_ITEMS),
+    () =>
+      combinedInsights.filter(
+        (entry) =>
+          (entry.kind === "hint" && !isErrorLikeFeedback(entry)) ||
+          entry.kind === "calculate" ||
+          entry.kind === "explain",
+      ),
     [combinedInsights],
   );
   const wrongInsights = useMemo(
-    () => combinedInsights.filter((entry) => entry.kind === "wrong").slice(-MAX_ERROR_ITEMS),
+    () =>
+      combinedInsights.filter(
+        (entry) => entry.kind === "wrong" || (entry.kind === "hint" && isErrorLikeFeedback(entry)),
+      ).slice(-MAX_ERROR_ITEMS),
     [combinedInsights],
   );
   const [sceneRevision, setSceneRevision] = useState(0);
@@ -406,7 +441,6 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const [boardSelectionRect, setBoardSelectionRect] = useState<any>(null);
   const [isBoardSelecting, setIsBoardSelecting] = useState(false);
   const [isAiSelecting, setIsAiSelecting] = useState(false);
-  const [selectionResults, setSelectionResults] = useState<any[]>([]);
   const [isStylePanelOpen, setIsStylePanelOpen] = useState(true);
   const analyzeTimerRef = useRef<any>(null);
   const lastSnapshotRef = useRef<string | null>(null);
@@ -598,7 +632,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           previousHints: previousHintsRef.current,
         });
 
-        const nextInsights = deriveInsightsFromAiResult(result, "explain");
+        const nextInsights = deriveInsightsFromAiResult(result, "hint");
         const newHintTexts = nextInsights
           .filter((e: any) => e.kind === "hint")
           .map((e: any) => e.content);
@@ -607,7 +641,15 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           hintLevelRef.current = Math.min(4, hintLevelRef.current + 1);
         }
         if (nextInsights.length > 0) {
-          setManualInsights((previous) => mergeLimitedInsights(previous, nextInsights));
+          const hasNewErrors = nextInsights.some((entry: any) => entry.kind === "wrong");
+          setManualInsights((previous) =>
+            mergeLimitedInsights(
+              hasNewErrors
+                ? previous.filter((entry) => entry.kind === "wrong")
+                : previous,
+              nextInsights,
+            ),
+          );
         }
 
         setHint("AI feedback updated.");
@@ -835,30 +877,6 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     setManualInsights((previous) => mergeLimitedInsights(previous, incomingInsights));
   }, []);
 
-  const appendLimitedSelectionResult = useCallback((incomingResult: any) => {
-    setSelectionResults((previous) => {
-      const merged = [incomingResult, ...previous];
-      let explainCount = 0;
-      let calculateCount = 0;
-
-      return merged.filter((entry) => {
-        if (entry.mode === "explain") {
-          if (explainCount >= MAX_EXPLAIN_RESULTS) return false;
-          explainCount += 1;
-          return true;
-        }
-
-        if (entry.mode === "calculate") {
-          if (calculateCount >= MAX_CALCULATE_RESULTS) return false;
-          calculateCount += 1;
-          return true;
-        }
-
-        return false;
-      });
-    });
-  }, []);
-
   const startSelectionTool = (mode: string) => {
     setSelectionMode(mode);
     setBoardSelectionRect(null);
@@ -924,19 +942,9 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           mode: mode === "calculate" ? "calculate" : "explain",
         });
 
-        if (mode === "calculate") {
-          const value = readCalcValueFromAiResult(result);
-          if (value) {
-            appendLimitedSelectionResult({ mode: "calculate", value });
-          }
-          appendLimitedInsights(deriveInsightsFromAiResult(result, "calculate"));
-        } else {
-          const text = readExplainTextFromAiResult(result);
-          if (text) {
-            appendLimitedSelectionResult({ mode: "explain", text });
-          }
-          appendLimitedInsights(deriveInsightsFromAiResult(result, "explain"));
-        }
+        appendLimitedInsights(
+          deriveInsightsFromAiResult(result, mode === "calculate" ? "calculate" : "explain"),
+        );
 
         setHint("Selection analyzed.");
       } catch {
@@ -945,7 +953,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         setIsAiSelecting(false);
       }
     },
-    [assignmentId, problemImageUrl, problemIndex, appendLimitedSelectionResult, appendLimitedInsights],
+    [assignmentId, problemImageUrl, problemIndex, appendLimitedInsights],
   );
 
   const handleBoardSelectionStart = (event: React.PointerEvent) => {
@@ -1020,16 +1028,16 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           {!selectionMode && (
             <>
               <p className="status-pill">{status}</p>
-              <button 
-                type="button" 
-                className="selection-tool-btn selection-tool-btn-blue"
+              <button
+                type="button"
+                className="btn-secondary selection-tool-btn selection-tool-btn-blue"
                 onClick={() => startSelectionTool("calculate")}
               >
-                Calc
+                Calculate
               </button>
-              <button 
-                type="button" 
-                className="selection-tool-btn selection-tool-btn-yellow"
+              <button
+                type="button"
+                className="btn-secondary selection-tool-btn selection-tool-btn-yellow"
                 onClick={() => startSelectionTool("explain")}
               >
                 Explain
@@ -1049,16 +1057,16 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
               </p>
               <button
                 type="button"
-                className={`selection-tool-btn selection-tool-btn-blue ${
+                className={`btn-secondary selection-tool-btn selection-tool-btn-blue ${
                   selectionMode === "calculate" ? "selection-tool-btn-active" : ""
                 }`}
                 onClick={() => startSelectionTool("calculate")}
               >
-                Calc
+                Calculate
               </button>
               <button
                 type="button"
-                className={`selection-tool-btn selection-tool-btn-yellow ${
+                className={`btn-secondary selection-tool-btn selection-tool-btn-yellow ${
                   selectionMode === "explain" ? "selection-tool-btn-active" : ""
                 }`}
                 onClick={() => startSelectionTool("explain")}
@@ -1178,47 +1186,49 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           </button>
 
           <div className="insights-panel">
-            <h2>Insights</h2>
+            <h2>Recommendations</h2>
 
-            {selectionResults.length > 0 && (
-              <div className="selection-results">
-                {selectionResults.map((result, index) => (
-                  <div
-                    key={index}
-                    className={`selection-result-card selection-result-card-${result.mode}`}
-                  >
-                    {result.mode === "calculate" && <div>Result: {result.value}</div>}
-                    {result.mode === "explain" && <LatexText text={result.text} />}
-                  </div>
+            {wrongInsights.length > 0 && (
+              <div className="insight-group">
+                <h3>Errors</h3>
+                {wrongInsights.map((insight) => (
+                  <details key={insight.id} className="insight-item insight-item-wrong" open>
+                    <summary>{insight.title || "Error Found"}</summary>
+                    <LatexText text={insight.content} as="p" />
+                  </details>
                 ))}
               </div>
             )}
 
             {hintInsights.length > 0 && (
               <div className="insight-group">
-                <h3>💡 Hints</h3>
+                <h3>Hints</h3>
                 {hintInsights.map((insight) => (
-                  <details key={insight.id} className="insight-item insight-item-hint">
-                    <summary>{insight.title || "Hint"}</summary>
+                  <details
+                    key={insight.id}
+                    className={`insight-item ${
+                      insight.kind === "calculate"
+                        ? "insight-item-calculate"
+                        : insight.kind === "explain"
+                          ? "insight-item-explain"
+                          : "insight-item-hint"
+                    }`}
+                  >
+                    <summary>
+                      {insight.title ||
+                        (insight.kind === "calculate"
+                          ? "Calculated Result"
+                          : insight.kind === "explain"
+                            ? "Explained Selection"
+                            : "Hint")}
+                    </summary>
                     <LatexText text={insight.content} as="p" />
                   </details>
                 ))}
               </div>
             )}
 
-            {wrongInsights.length > 0 && (
-              <div className="insight-group">
-                <h3>⚠️ Errors</h3>
-                {wrongInsights.map((insight) => (
-                  <details key={insight.id} className="insight-item insight-item-wrong">
-                    <summary>{insight.title || "Watch Out"}</summary>
-                    <LatexText text={insight.content} as="p" />
-                  </details>
-                ))}
-              </div>
-            )}
-
-            {hintInsights.length === 0 && wrongInsights.length === 0 && selectionResults.length === 0 && (
+            {hintInsights.length === 0 && wrongInsights.length === 0 && (
               <p className="ai-buddy-status">Start drawing to receive AI feedback.</p>
             )}
           </div>

@@ -1304,27 +1304,29 @@ textarea {
 }
 
 .selection-tool-btn {
-  min-width: 76px;
+  min-width: 104px;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 2px solid #0f172a;
+  border-width: 1px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  letter-spacing: 0.01em;
+  text-transform: none;
 }
 
 .selection-tool-btn-blue {
-  color: #0f172a;
-  background: #3b82f6;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-color: #93c5fd;
 }
 
 .selection-tool-btn-yellow {
-  color: #0f172a;
-  background: #facc15;
+  color: #a16207;
+  background: #fefce8;
+  border-color: #fde68a;
 }
 
 .selection-tool-btn-active {
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.9), 0 0 0 2px rgba(59, 130, 246, 0.18);
 }
 
 .eyebrow {
@@ -1492,6 +1494,36 @@ textarea {
 
 .insight-item-wrong p {
   background: #fef2f2;
+}
+
+.insight-item-calculate {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.insight-item-calculate summary {
+  color: #eff6ff;
+  background: #2563eb;
+}
+
+.insight-item-calculate p {
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.insight-item-explain {
+  border-color: #eab308;
+  background: #fefce8;
+}
+
+.insight-item-explain summary {
+  color: #422006;
+  background: #facc15;
+}
+
+.insight-item-explain p {
+  background: #fefce8;
+  color: #713f12;
 }
 
 .ai-buddy-status {

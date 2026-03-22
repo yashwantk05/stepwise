@@ -1,23 +1,35 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import "../styles/index.css";
 import "../styles/app.css";
-import { getCurrentUser, signOut, requestAccountDeletion, getLearningStreakSummary, recordLearningActivity } from './services/storage';
+import {
+  getCurrentUser,
+  signOut,
+  requestAccountDeletion,
+  getLearningStreakSummary,
+  recordLearningActivity,
+} from './services/storage';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { WhiteboardPage } from './pages/WhiteboardPage';
 import { MyNotesPage } from './pages/MyNotesPage';
+import { WeakAreasPage } from './pages/WeakAreasPage';
+import { ProgressAnalyticsPage } from './pages/ProgressAnalyticsPage';
+import { SocraticTutorPage } from './pages/SocraticTutorPage';
 import { StudyToolPage } from './pages/StudyToolPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
 import { ProblemBoardPage } from './pages/ProblemBoardPage';
 import type { StudyToolType } from './services/studyTools';
 
-type Route = 
+type Route =
   | { type: 'dashboard' }
   | { type: 'whiteboard' }
   | { type: 'notes' }
+  | { type: 'weak-areas' }
+  | { type: 'progress-analytics' }
+  | { type: 'socratic-tutor'; context?: Record<string, unknown> }
   | { type: 'study-tool'; tool: StudyToolType; subjectId?: string }
   | { type: 'subject'; subjectId: string }
   | { type: 'assignment'; subjectId: string; assignmentId: string }
@@ -81,7 +93,7 @@ function App() {
       "Delete your account? This will remove all notebooks, assignments, and uploaded files."
     );
     if (!confirmed) return;
-    
+
     await requestAccountDeletion();
     setUser(null);
   }, []);
@@ -93,6 +105,12 @@ function App() {
       setRoute({ type: 'whiteboard' });
     } else if (page === 'notes') {
       setRoute({ type: 'notes' });
+    } else if (page === 'weak-areas') {
+      setRoute({ type: 'weak-areas' });
+    } else if (page === 'progress-analytics') {
+      setRoute({ type: 'progress-analytics' });
+    } else if (page === 'socratic-tutor') {
+      setRoute({ type: 'socratic-tutor' });
     } else if (page === 'flashcards') {
       setRoute({ type: 'study-tool', tool: 'flashcards' });
     } else if (page === 'quiz') {
@@ -102,6 +120,7 @@ function App() {
     } else if (page === 'revision-sheet') {
       setRoute({ type: 'study-tool', tool: 'revision-sheet' });
     }
+
     if (isCompactLayout) {
       setIsSidebarOpen(false);
     }
@@ -133,10 +152,10 @@ function App() {
 
   if (!authReady) {
     return (
-      <div style={{ 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center', 
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
         minHeight: '100vh',
         background: 'var(--surface-light)'
       }}>
@@ -152,6 +171,9 @@ function App() {
   const getCurrentPage = () => {
     if (route.type === 'dashboard') return 'dashboard';
     if (route.type === 'notes') return 'notes';
+    if (route.type === 'weak-areas') return 'weak-areas';
+    if (route.type === 'progress-analytics') return 'progress-analytics';
+    if (route.type === 'socratic-tutor') return 'socratic-tutor';
     if (route.type === 'study-tool') return route.tool;
     return 'whiteboard';
   };
@@ -172,10 +194,10 @@ function App() {
         isCompact={isCompactLayout}
         onClose={() => setIsSidebarOpen(false)}
       />
-      
+
       <div className="app-main">
-        <Topbar 
-          user={user} 
+        <Topbar
+          user={user}
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
           showSidebarToggle={isCompactLayout}
@@ -183,7 +205,7 @@ function App() {
           streakCount={streakCount}
           notificationCount={notificationCount}
         />
-        
+
         {route.type === 'dashboard' && (
           <DashboardPage
             user={user}
@@ -196,12 +218,20 @@ function App() {
             }}
           />
         )}
-        
+
         {route.type === 'whiteboard' && (
           <WhiteboardPage onOpenSubject={openSubject} />
         )}
 
         {route.type === 'notes' && <MyNotesPage onOpenTool={openStudyTool} />}
+
+        {route.type === 'weak-areas' && <WeakAreasPage />}
+
+        {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
+
+        {route.type === 'socratic-tutor' && (
+          <SocraticTutorPage initialContext={route.context as any} />
+        )}
 
         {route.type === 'study-tool' && (
           <StudyToolPage
@@ -210,7 +240,7 @@ function App() {
             onBack={() => setRoute({ type: 'notes' })}
           />
         )}
-        
+
         {route.type === 'subject' && (
           <SubjectDetailPage
             subjectId={route.subjectId}
@@ -218,7 +248,7 @@ function App() {
             onOpenAssignment={(assignmentId) => openAssignment(route.subjectId, assignmentId)}
           />
         )}
-        
+
         {route.type === 'assignment' && (
           <AssignmentDetailPage
             subjectId={route.subjectId}
@@ -227,7 +257,7 @@ function App() {
             onOpenProblem={(problemIndex) => openProblem(route.subjectId, route.assignmentId, problemIndex)}
           />
         )}
-        
+
         {route.type === 'problem' && (
           <ProblemBoardPage
             subjectId={route.subjectId}

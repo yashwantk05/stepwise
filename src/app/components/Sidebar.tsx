@@ -1,4 +1,5 @@
 import React from 'react';
+import { AlertTriangle, BarChart3, BrainCircuit, LayoutDashboard, NotebookPen, PanelTopOpen } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: string;
@@ -42,14 +43,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           className={`nav-item ${currentPage === 'dashboard' ? 'active' : ''}`}
           onClick={() => handleNavigate('dashboard')}
         >
-          <span className="nav-icon">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="6" height="6" rx="1" />
-              <rect x="11" y="3" width="6" height="6" rx="1" />
-              <rect x="3" y="11" width="6" height="6" rx="1" />
-              <rect x="11" y="11" width="6" height="6" rx="1" />
-            </svg>
-          </span>
+          <span className="nav-icon"><LayoutDashboard size={20} /></span>
           Dashboard
         </button>
 
@@ -57,32 +51,45 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           className={`nav-item ${currentPage === 'whiteboard' ? 'active' : ''}`}
           onClick={() => handleNavigate('whiteboard')}
         >
-          <span className="nav-icon">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 3h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
-              <path d="M6 7h8M6 10h8M6 13h5" strokeLinecap="round" />
-            </svg>
-          </span>
+          <span className="nav-icon"><PanelTopOpen size={20} /></span>
           AI Whiteboard
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'weak-areas' ? 'active' : ''}`}
+          onClick={() => handleNavigate('weak-areas')}
+        >
+          <span className="nav-icon"><AlertTriangle size={20} /></span>
+          Weak Areas
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'progress-analytics' ? 'active' : ''}`}
+          onClick={() => handleNavigate('progress-analytics')}
+        >
+          <span className="nav-icon"><BarChart3 size={20} /></span>
+          Progress Analytics
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'socratic-tutor' ? 'active' : ''}`}
+          onClick={() => handleNavigate('socratic-tutor')}
+        >
+          <span className="nav-icon"><BrainCircuit size={20} /></span>
+          Socratic Tutor
         </button>
 
         <button
           className={`nav-item ${currentPage === 'notes' ? 'active' : ''}`}
           onClick={() => handleNavigate('notes')}
         >
-          <span className="nav-icon">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M5 3h8l3 3v11a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
-              <path d="M13 3v4h4" />
-              <path d="M7 10h6M7 13h6" strokeLinecap="round" />
-            </svg>
-          </span>
+          <span className="nav-icon"><NotebookPen size={20} /></span>
           My Notes
         </button>
 
         <button
           className={`nav-item ${currentPage === 'flashcards' ? 'active' : ''}`}
-          onClick={() => onNavigate('flashcards')}
+          onClick={() => handleNavigate('flashcards')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
@@ -95,7 +102,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
 
         <button
           className={`nav-item ${currentPage === 'quiz' ? 'active' : ''}`}
-          onClick={() => onNavigate('quiz')}
+          onClick={() => handleNavigate('quiz')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
@@ -109,7 +116,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
 
         <button
           className={`nav-item ${currentPage === 'mind-map' ? 'active' : ''}`}
-          onClick={() => onNavigate('mind-map')}
+          onClick={() => handleNavigate('mind-map')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
@@ -124,7 +131,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
 
         <button
           className={`nav-item ${currentPage === 'revision-sheet' ? 'active' : ''}`}
-          onClick={() => onNavigate('revision-sheet')}
+          onClick={() => handleNavigate('revision-sheet')}
         >
           <span className="nav-icon">
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">

@@ -40,28 +40,57 @@ interface ProblemProgressRecord {
   id: string;
   assignmentId: string;
   problemIndex: number;
-  attempted: boolean;
-  solved: boolean;
+  attempted?: boolean;
+  solved?: boolean;
   attemptedAt: number | null;
   solvedAt: number | null;
   totalTimeSeconds: number;
   mistakeCount: number;
   updatedAt: number;
+  addTimeSeconds?: number;
+  createdAt?: number | string;
+  updatedAt: number | string;
+  lastWorkedAt?: number | string;
+  completedAt?: number | string;
+  [key: string]: unknown;
 }
 
 interface NotebookQuizSessionRecord {
   id: string;
   subjectId: string;
   subjectName: string;
-  attempted: boolean;
-  solved: boolean;
+  attempted?: boolean;
+  solved?: boolean;
   attemptedAt: number | null;
   solvedAt: number | null;
-  totalQuestions: number;
-  correctCount: number;
-  mistakeCount: number;
+  totalQuestions?: number;
+  correctCount?: number;
+  mistakeCount?: number;
+  addTimeSeconds?: number;
   totalTimeSeconds: number;
-  updatedAt: number;
+  updatedAt: number | string;
+  [key: string]: unknown;
+}
+
+interface ErrorSummaryRecord {
+  label?: string;
+  topic?: string;
+  concept?: string;
+  errorType?: string;
+  count?: number;
+  mistakes?: number;
+  total?: number;
+  [key: string]: unknown;
+}
+
+interface ProblemErrorAttemptRecord {
+  id?: string;
+  createdAt?: number | string;
+  summary?: string;
+  errorType?: string;
+  mistakes?: Array<Record<string, unknown>>;
+  items?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
 }
 
 interface FileRecord {
@@ -733,7 +762,6 @@ export const deleteProblemImage = async (assignmentId: string, problemIndex: num
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`, {
     method: "DELETE",
   });
-
 export const listNotebookQuizSessions = async (): Promise<{ sessions: NotebookQuizSessionRecord[] }> =>
   (await request("/notebooks/quiz-sessions")) as { sessions: NotebookQuizSessionRecord[] };
 
@@ -759,6 +787,31 @@ export const updateNotebookQuizSession = async (
     },
     body: JSON.stringify(payload),
   })) as NotebookQuizSessionRecord;
+
+export const getAssignmentProblemProgress = async (
+  assignmentId: string,
+): Promise<ProblemProgressRecord[]> =>
+  ((await request(`/assignments/${encodeURIComponent(assignmentId)}/problems/progress`)) as {
+    problems?: ProblemProgressRecord[];
+  })?.problems || [];
+
+export const getNotebookQuizSessions = async (): Promise<NotebookQuizSessionRecord[]> =>
+  ((await request("/notebooks/quiz-sessions")) as { sessions?: NotebookQuizSessionRecord[] })?.sessions || [];
+
+export const getErrorSummary = async (
+  groupBy: "topic" | "concept" | "errorType",
+): Promise<ErrorSummaryRecord[]> =>
+  ((await request(`/errors/summary?groupBy=${encodeURIComponent(groupBy)}`)) as {
+    items?: ErrorSummaryRecord[];
+  })?.items || [];
+
+export const getProblemErrors = async (
+  assignmentId: string,
+  problemIndex: number,
+): Promise<ProblemErrorAttemptRecord[]> =>
+  ((await request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/errors`,
+  )) as { attempts?: ProblemErrorAttemptRecord[] })?.attempts || [];
 
 const toLocalDateKey = (time: number) => {
   const date = new Date(time);

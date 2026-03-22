@@ -1418,6 +1418,12 @@ textarea {
   box-shadow: 0 18px 36px rgba(59, 130, 246, 0.14);
 }
 
+.nav-item.active {
+  background: linear-gradient(135deg, #3b82f6 0%, #9333ea 100%);
+  color: white;
+  box-shadow: 0 14px 28px rgba(124, 58, 237, 0.18);
+}
+
 .note-card strong {
   font-size: 1.2rem;
   font-weight: 600;
@@ -1537,6 +1543,302 @@ textarea {
   color: #64748b;
 }
 
+.weak-areas-page {
+  display: grid;
+  gap: 24px;
+}
+
+.weak-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px 2px;
+}
+
+.weak-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #7c3aed;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.weak-header h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.25rem);
+  line-height: 1.02;
+}
+
+.weak-header p {
+  margin: 12px 0 0;
+  color: #475569;
+  font-size: 1.1rem;
+}
+
+.weak-status-card,
+.weak-panel,
+.weak-topic-card,
+.learning-empty-state {
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(221, 214, 254, 0.9);
+  box-shadow: 0 20px 40px rgba(139, 92, 246, 0.08);
+}
+
+.weak-status-card {
+  min-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(239, 246, 255, 0.96), rgba(245, 243, 255, 0.96));
+}
+
+.weak-status-card svg {
+  color: #7c3aed;
+}
+
+.weak-status-card strong {
+  display: block;
+  font-size: 1.5rem;
+}
+
+.weak-status-card span {
+  display: block;
+  color: #475569;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.weak-panel {
+  border-radius: 28px;
+  padding: 28px;
+}
+
+.weak-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.weak-panel-heading h2 {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.9rem;
+}
+
+.weak-panel-heading p {
+  margin: 10px 0 0;
+  color: #475569;
+  font-size: 1rem;
+}
+
+.weak-chart-shell {
+  min-height: 320px;
+}
+
+.weak-empty-chart,
+.weak-loading,
+.weak-empty-cards,
+.learning-empty-state {
+  border-radius: 20px;
+  padding: 28px;
+  color: #475569;
+}
+
+.weak-empty-chart,
+.weak-loading,
+.weak-empty-cards {
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.92), rgba(243, 232, 255, 0.72));
+  border: 1px dashed #c4b5fd;
+}
+
+.weak-topic-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.weak-topic-card {
+  border-radius: 22px;
+  padding: 20px;
+  border-color: rgba(252, 165, 165, 0.72);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(254, 242, 242, 0.94));
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.weak-topic-card h3 {
+  margin: 0 0 12px;
+  font-size: 1.55rem;
+  line-height: 1.15;
+}
+
+.weak-topic-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #e2e8f0;
+  background: white;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.weak-topic-metric {
+  text-align: right;
+}
+
+.weak-topic-metric strong {
+  display: block;
+  color: #ef4444;
+  font-size: 2.4rem;
+  line-height: 1;
+}
+
+.weak-topic-metric span {
+  display: block;
+  margin-top: 8px;
+  color: #64748b;
+}
+
+.learning-panel {
+  background: linear-gradient(180deg, rgba(245, 243, 255, 0.96), rgba(255, 255, 255, 0.94));
+}
+
+.learning-empty-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 22px;
+}
+
+.learning-empty-state svg {
+  color: #7c3aed;
+}
+
+.learning-accordion {
+  display: grid;
+  gap: 14px;
+}
+
+.learning-notebook,
+.learning-group {
+  border: 1px solid rgba(221, 214, 254, 0.9);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  overflow: hidden;
+}
+
+.learning-notebook > summary,
+.learning-group > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.learning-notebook > summary::-webkit-details-marker,
+.learning-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.learning-notebook > summary {
+  padding: 18px 20px;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.learning-summary-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.learning-notebook[open] > summary svg:last-child,
+.learning-group[open] > summary svg:last-child {
+  transform: rotate(180deg);
+}
+
+.learning-notebook > summary svg:last-child,
+.learning-group > summary svg:last-child {
+  transition: transform 0.2s ease;
+}
+
+.learning-notebook-body {
+  display: grid;
+  gap: 12px;
+  padding: 0 18px 18px;
+}
+
+.learning-group > summary {
+  padding: 16px 18px;
+  background: linear-gradient(135deg, rgba(248, 250, 252, 0.96), rgba(243, 232, 255, 0.6));
+  font-weight: 600;
+}
+
+.learning-group-body {
+  padding: 16px 18px 18px;
+  border-top: 1px solid rgba(226, 232, 240, 0.9);
+  animation: weakAccordionIn 0.2s ease;
+}
+
+.learning-group-body ul {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  color: #334155;
+  display: grid;
+  gap: 8px;
+}
+
+.learning-group-body p {
+  margin: 0;
+  color: #1e293b;
+  line-height: 1.6;
+}
+
+.prompt-panel {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.9));
+}
+
+.prompt-preview {
+  margin: 0;
+  padding: 18px;
+  border-radius: 18px;
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  line-height: 1.6;
+}
+
+@keyframes weakAccordionIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (max-width: 860px) {
   .canvas-area {
     height: 62vh;
@@ -1584,5 +1886,30 @@ textarea {
 
   .notes-inline-create-row {
     flex-direction: column;
+  }
+
+  .weak-header,
+  .weak-topic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .weak-header {
+    flex-direction: column;
+  }
+
+  .weak-status-card {
+    width: 100%;
+  }
+
+  .weak-panel {
+    padding: 20px;
+  }
+
+  .weak-topic-card {
+    flex-direction: column;
+  }
+
+  .weak-topic-metric {
+    text-align: left;
   }
 }

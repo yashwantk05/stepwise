@@ -8,6 +8,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { WhiteboardPage } from './pages/WhiteboardPage';
 import { MyNotesPage } from './pages/MyNotesPage';
+import { WeakAreasPage } from './pages/WeakAreasPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
 import { ProblemBoardPage } from './pages/ProblemBoardPage';
@@ -16,6 +17,7 @@ type Route =
   | { type: 'dashboard' }
   | { type: 'whiteboard' }
   | { type: 'notes' }
+  | { type: 'weak-areas' }
   | { type: 'subject'; subjectId: string }
   | { type: 'assignment'; subjectId: string; assignmentId: string }
   | { type: 'problem'; subjectId: string; assignmentId: string; problemIndex: number };
@@ -60,6 +62,8 @@ function App() {
       setRoute({ type: 'whiteboard' });
     } else if (page === 'notes') {
       setRoute({ type: 'notes' });
+    } else if (page === 'weak-areas') {
+      setRoute({ type: 'weak-areas' });
     }
   }, []);
 
@@ -104,6 +108,7 @@ function App() {
   const getCurrentPage = () => {
     if (route.type === 'dashboard') return 'dashboard';
     if (route.type === 'notes') return 'notes';
+    if (route.type === 'weak-areas') return 'weak-areas';
     return 'whiteboard';
   };
 
@@ -125,6 +130,8 @@ function App() {
         )}
 
         {route.type === 'notes' && <MyNotesPage />}
+
+        {route.type === 'weak-areas' && <WeakAreasPage />}
         
         {route.type === 'subject' && (
           <SubjectDetailPage

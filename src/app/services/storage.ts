@@ -36,6 +36,34 @@ interface AssignmentProblem {
   title: string;
 }
 
+interface ProblemProgressRecord {
+  id: string;
+  assignmentId: string;
+  problemIndex: number;
+  attempted: boolean;
+  solved: boolean;
+  attemptedAt: number | null;
+  solvedAt: number | null;
+  totalTimeSeconds: number;
+  mistakeCount: number;
+  updatedAt: number;
+}
+
+interface NotebookQuizSessionRecord {
+  id: string;
+  subjectId: string;
+  subjectName: string;
+  attempted: boolean;
+  solved: boolean;
+  attemptedAt: number | null;
+  solvedAt: number | null;
+  totalQuestions: number;
+  correctCount: number;
+  mistakeCount: number;
+  totalTimeSeconds: number;
+  updatedAt: number;
+}
+
 interface FileRecord {
   fileName: string;
   size: number;
@@ -613,6 +641,38 @@ export const deleteAssignmentPdf = async (assignmentId: string): Promise<void> =
 export const getProblemScene = async (assignmentId: string, problemIndex: number) =>
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/scene`);
 
+export const listAssignmentProblemProgress = async (assignmentId: string): Promise<{
+  assignmentId: string;
+  problemCount: number;
+  problems: ProblemProgressRecord[];
+}> =>
+  (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems/progress`)) as {
+    assignmentId: string;
+    problemCount: number;
+    problems: ProblemProgressRecord[];
+  };
+
+export const getProblemProgress = async (
+  assignmentId: string,
+  problemIndex: number,
+): Promise<ProblemProgressRecord> =>
+  (await request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/progress`,
+  )) as ProblemProgressRecord;
+
+export const updateProblemProgress = async (
+  assignmentId: string,
+  problemIndex: number,
+  payload: { attempted?: boolean; solved?: boolean; addTimeSeconds?: number },
+): Promise<ProblemProgressRecord> =>
+  (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/progress`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })) as ProblemProgressRecord;
+
 export const saveProblemScene = async (assignmentId: string, problemIndex: number, scene: unknown) =>
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/scene`, {
     method: "PUT",
@@ -673,6 +733,32 @@ export const deleteProblemImage = async (assignmentId: string, problemIndex: num
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`, {
     method: "DELETE",
   });
+
+export const listNotebookQuizSessions = async (): Promise<{ sessions: NotebookQuizSessionRecord[] }> =>
+  (await request("/notebooks/quiz-sessions")) as { sessions: NotebookQuizSessionRecord[] };
+
+export const getNotebookQuizSession = async (subjectId: string): Promise<NotebookQuizSessionRecord> =>
+  (await request(`/notebooks/${encodeURIComponent(subjectId)}/quiz-session`)) as NotebookQuizSessionRecord;
+
+export const updateNotebookQuizSession = async (
+  subjectId: string,
+  payload: {
+    subjectName?: string;
+    attempted?: boolean;
+    solved?: boolean;
+    totalQuestions?: number;
+    correctCount?: number;
+    mistakeCount?: number;
+    addTimeSeconds?: number;
+  },
+): Promise<NotebookQuizSessionRecord> =>
+  (await request(`/notebooks/${encodeURIComponent(subjectId)}/quiz-session`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  })) as NotebookQuizSessionRecord;
 
 const toLocalDateKey = (time: number) => {
   const date = new Date(time);

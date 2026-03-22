@@ -17,24 +17,34 @@ import {
   uploadProblemSceneToBlob,
 } from "./blobStorage.js";
 import {
+  createProblemErrorAttempt,
   deleteUserData,
   findAssignmentById,
+  getNotebookQuizSession,
+  getProblemProgress,
   getAssignmentPdfByAssignmentId,
   getProblemContext,
   getProblemImage,
   getScene,
   initDb,
   insertAssignment,
+  listNotebookQuizSessions,
+  listProblemProgressForAssignment,
   listAssignmentPdfsForUser,
+  listProblemErrorAttempts,
+  listProblemErrorSummary,
   listProblemImageBlobNamesForAssignment,
   listProblemImageBlobNamesForUser,
   listAssignmentsForUser,
   listSceneBlobNamesForAssignment,
   listProblemTitles,
   removeProblemImage,
+  removeProblemErrors,
   removeProblemContext,
   removeProblemTitle,
   removeScene,
+  upsertNotebookQuizSession,
+  upsertProblemProgress,
   removeAssignmentPdf,
   removeAssignment,
   setAssignmentProblemCount,
@@ -72,6 +82,15 @@ const imageUpload = multer({
 });
 const MIN_PROBLEM_COUNT = 1;
 const MAX_PROBLEM_COUNT = 60;
+const MAX_ERROR_MISTAKES = 10;
+const MAX_TOPICS_PER_MISTAKE = 5;
+const MAX_CONCEPTS_PER_MISTAKE = 8;
+const MAX_OBSERVED_STEP_LENGTH = 220;
+const MAX_STAGE_LENGTH = 80;
+const MAX_ERROR_TYPE_LENGTH = 40;
+const MAX_MISTAKE_SUMMARY_LENGTH = 180;
+const MAX_WHY_WRONG_LENGTH = 260;
+const MAX_SUGGESTED_FIX_LENGTH = 260;
 const SESSION_COOKIE_NAME = "stepwise_session";
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -1194,6 +1213,119 @@ const parseProblemIndex = (value) => {
   return parsed;
 };
 
+const clampLimit = (value, fallback = 20, max = 100) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) return fallback;
+  return Math.min(parsed, max);
+};
+
+const parseNonNegativeSeconds = (value) => {
+  if (value == null || value === "") return 0;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.floor(parsed);
+};
+
+const normalizeBoundedText = (value, maxLength) => String(value || "").trim().slice(0, maxLength);
+
+const normalizeTagList = (value, maxItems = 5, maxLength = 64) => {
+  if (!Array.isArray(value)) return [];
+  const deduped = [];
+  const seen = new Set();
+  for (const entry of value) {
+    const normalized = normalizeBoundedText(entry, maxLength).toLowerCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    deduped.push(normalized);
+    if (deduped.length >= maxItems) break;
+  }
+  return deduped;
+};
+
+const normalizeErrorPayload = (body) => {
+  const allowedCorrectness = new Set(["correct", "incorrect", "unclear"]);
+  const allowedConfidence = new Set(["low", "medium", "high"]);
+  const allowedSeverity = new Set(["low", "medium", "high"]);
+  const allowedSource = new Set(["error_analysis"]);
+
+  const sourceRaw = normalizeBoundedText(body?.source || "error_analysis", 40).toLowerCase();
+  if (!allowedSource.has(sourceRaw)) {
+    return { error: "source must be one of: error_analysis." };
+  }
+
+  const correctness = normalizeBoundedText(body?.correctness, 20).toLowerCase();
+  if (!allowedCorrectness.has(correctness)) {
+    return { error: "correctness must be one of: correct, incorrect, unclear." };
+  }
+
+  const confidence = normalizeBoundedText(body?.confidence, 20).toLowerCase();
+  if (!allowedConfidence.has(confidence)) {
+    return { error: "confidence must be one of: low, medium, high." };
+  }
+
+  const hintLevelRaw = body?.hintLevel;
+  const hintLevel =
+    hintLevelRaw == null || hintLevelRaw === ""
+      ? null
+      : Math.max(1, Math.min(4, Number(hintLevelRaw) || 1));
+
+  const observedStep = normalizeBoundedText(body?.observedStep, MAX_OBSERVED_STEP_LENGTH);
+  const stage = normalizeBoundedText(body?.stage, MAX_STAGE_LENGTH);
+  const rawAnalysis =
+    body?.rawAnalysis && typeof body.rawAnalysis === "object" && !Array.isArray(body.rawAnalysis)
+      ? body.rawAnalysis
+      : null;
+
+  const mistakesRaw = Array.isArray(body?.mistakes) ? body.mistakes : [];
+  if (mistakesRaw.length > MAX_ERROR_MISTAKES) {
+    return { error: `mistakes must include at most ${MAX_ERROR_MISTAKES} entries.` };
+  }
+
+  const mistakes = mistakesRaw.map((entry) => {
+    const severity = normalizeBoundedText(entry?.severity || "medium", 20).toLowerCase();
+    if (!allowedSeverity.has(severity)) {
+      return { error: "mistake severity must be one of: low, medium, high." };
+    }
+
+    const mistakeSummary = normalizeBoundedText(entry?.mistakeSummary, MAX_MISTAKE_SUMMARY_LENGTH);
+    if (!mistakeSummary) {
+      return { error: "mistakeSummary is required for each mistake." };
+    }
+
+    return {
+      errorType: normalizeBoundedText(entry?.errorType, MAX_ERROR_TYPE_LENGTH).toLowerCase(),
+      mistakeSummary,
+      whyWrong: normalizeBoundedText(entry?.whyWrong, MAX_WHY_WRONG_LENGTH),
+      suggestedFix: normalizeBoundedText(entry?.suggestedFix, MAX_SUGGESTED_FIX_LENGTH),
+      severity,
+      topics: normalizeTagList(entry?.topics, MAX_TOPICS_PER_MISTAKE),
+      concepts: normalizeTagList(entry?.concepts, MAX_CONCEPTS_PER_MISTAKE),
+    };
+  });
+
+  const invalidMistake = mistakes.find((entry) => entry?.error);
+  if (invalidMistake?.error) {
+    return { error: invalidMistake.error };
+  }
+
+  if (correctness === "incorrect" && mistakes.length === 0) {
+    return { error: "mistakes must include at least one item when correctness is incorrect." };
+  }
+
+  return {
+    payload: {
+      source: sourceRaw,
+      observedStep,
+      stage,
+      correctness,
+      confidence,
+      hintLevel: Number.isInteger(hintLevel) ? hintLevel : null,
+      rawAnalysis,
+      mistakes,
+    },
+  };
+};
+
 const getAssignmentAndProblemIndex = async (request, response) => {
   const assignment = await findAssignmentById(request.user.id, request.params.id);
   if (!assignment) {
@@ -1216,6 +1348,50 @@ const getAssignmentAndProblemIndex = async (request, response) => {
 
 app.get("/api/health", (_request, response) => {
   response.json({ status: "ok", service: "stepwise-api" });
+});
+
+app.get("/api/contracts/problem-errors", (_request, response) => {
+  response.json({
+    version: "1.0",
+    endpoint: "/api/assignments/:id/problems/:problemIndex/errors",
+    enums: {
+      source: ["error_analysis"],
+      correctness: ["correct", "incorrect", "unclear"],
+      confidence: ["low", "medium", "high"],
+      severity: ["low", "medium", "high"],
+    },
+    limits: {
+      maxMistakes: MAX_ERROR_MISTAKES,
+      maxTopicsPerMistake: MAX_TOPICS_PER_MISTAKE,
+      maxConceptsPerMistake: MAX_CONCEPTS_PER_MISTAKE,
+      maxObservedStepLength: MAX_OBSERVED_STEP_LENGTH,
+      maxStageLength: MAX_STAGE_LENGTH,
+      maxErrorTypeLength: MAX_ERROR_TYPE_LENGTH,
+      maxMistakeSummaryLength: MAX_MISTAKE_SUMMARY_LENGTH,
+      maxWhyWrongLength: MAX_WHY_WRONG_LENGTH,
+      maxSuggestedFixLength: MAX_SUGGESTED_FIX_LENGTH,
+    },
+    shape: {
+      source: "error_analysis",
+      observedStep: "string",
+      stage: "string",
+      correctness: "correct | incorrect | unclear",
+      confidence: "low | medium | high",
+      hintLevel: "number | null",
+      rawAnalysis: "object | null",
+      mistakes: [
+        {
+          errorType: "string",
+          mistakeSummary: "string",
+          whyWrong: "string",
+          suggestedFix: "string",
+          severity: "low | medium | high",
+          topics: ["string"],
+          concepts: ["string"],
+        },
+      ],
+    },
+  });
 });
 
 const isDebugRoutesEnabled = () => {
@@ -1757,6 +1933,25 @@ app.get("/api/assignments/:id/problems", requireDb, requireAuth, async (request,
   response.json(problems);
 });
 
+app.get("/api/assignments/:id/problems/progress", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const records = await listProblemProgressForAssignment(
+    request.user.id,
+    request.params.id,
+    assignment.problemCount,
+  );
+  response.json({
+    assignmentId: request.params.id,
+    problemCount: assignment.problemCount,
+    problems: records,
+  });
+});
+
 app.patch("/api/assignments/:id/problems/:problemIndex", requireDb, requireAuth, async (request, response) => {
   const target = await getAssignmentAndProblemIndex(request, response);
   if (!target) return;
@@ -1797,6 +1992,7 @@ app.delete(
       removeScene(request.user.id, request.params.id, removedProblemIndex),
       removeProblemImage(request.user.id, request.params.id, removedProblemIndex),
     ]);
+    await removeProblemErrors(request.user.id, request.params.id, removedProblemIndex);
     await removeProblemContext(request.user.id, request.params.id, removedProblemIndex);
     await removeProblemTitle(request.user.id, request.params.id, removedProblemIndex);
     if (removedScene?.blobName) {
@@ -1840,6 +2036,7 @@ app.delete(
       removeScene(request.user.id, request.params.id, problemIndex),
       removeProblemImage(request.user.id, request.params.id, problemIndex),
     ]);
+    await removeProblemErrors(request.user.id, request.params.id, problemIndex);
     await removeProblemContext(request.user.id, request.params.id, problemIndex);
     await removeProblemTitle(request.user.id, request.params.id, problemIndex);
 
@@ -2031,6 +2228,61 @@ app.get(
           }
         : null,
     );
+  },
+);
+
+app.get(
+  "/api/assignments/:id/problems/:problemIndex/progress",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const record = await getProblemProgress(request.user.id, request.params.id, problemIndex);
+    response.json(
+      record || {
+        id: `${request.user.id}:${request.params.id}:${problemIndex}`,
+        userId: request.user.id,
+        assignmentId: request.params.id,
+        problemIndex,
+        attempted: false,
+        solved: false,
+        attemptedAt: null,
+        solvedAt: null,
+        totalTimeSeconds: 0,
+        mistakeCount: 0,
+        updatedAt: 0,
+      },
+    );
+  },
+);
+
+app.patch(
+  "/api/assignments/:id/problems/:problemIndex/progress",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const attempted = request.body?.attempted === true;
+    const solved = request.body?.solved === true;
+    const addTimeSeconds = parseNonNegativeSeconds(request.body?.addTimeSeconds);
+    if (addTimeSeconds == null) {
+      response.status(400).json({ message: "addTimeSeconds must be a non-negative number." });
+      return;
+    }
+
+    const record = await upsertProblemProgress(
+      request.user.id,
+      request.params.id,
+      problemIndex,
+      { attempted, solved, addTimeSeconds },
+    );
+    response.json(record);
   },
 );
 
@@ -2282,6 +2534,189 @@ app.put(
     response.json(record);
   },
 );
+
+app.post(
+  "/api/assignments/:id/problems/:problemIndex/errors",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const normalized = normalizeErrorPayload(request.body || {});
+    if (normalized.error) {
+      response.status(400).json({ message: normalized.error });
+      return;
+    }
+
+    const created = await createProblemErrorAttempt(
+      request.user.id,
+      request.params.id,
+      problemIndex,
+      normalized.payload,
+    );
+
+    response.status(201).json(created);
+  },
+);
+
+app.get(
+  "/api/assignments/:id/problems/:problemIndex/errors",
+  requireDb,
+  requireAuth,
+  async (request, response) => {
+    const target = await getAssignmentAndProblemIndex(request, response);
+    if (!target) return;
+    const { problemIndex } = target;
+
+    const limit = clampLimit(request.query?.limit, 50, 100);
+    const records = await listProblemErrorAttempts(
+      request.user.id,
+      request.params.id,
+      problemIndex,
+      limit,
+    );
+    response.json({
+      assignmentId: request.params.id,
+      problemIndex,
+      count: records.length,
+      attempts: records,
+    });
+  },
+);
+
+app.get("/api/assignments/:id/errors/summary", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const rawGroupBy = String(request.query?.groupBy || "topic").trim();
+  const groupBy =
+    rawGroupBy === "concept" || rawGroupBy === "errorType" || rawGroupBy === "topic"
+      ? rawGroupBy
+      : null;
+  if (!groupBy) {
+    response.status(400).json({ message: "groupBy must be one of: topic, concept, errorType." });
+    return;
+  }
+
+  const limit = clampLimit(request.query?.limit, 20, 100);
+  const items = await listProblemErrorSummary({
+    userId: request.user.id,
+    assignmentId: request.params.id,
+    groupBy,
+    limit,
+  });
+  response.json({
+    scope: "assignment",
+    assignmentId: request.params.id,
+    groupBy,
+    items,
+  });
+});
+
+app.get("/api/errors/summary", requireDb, requireAuth, async (request, response) => {
+  const rawGroupBy = String(request.query?.groupBy || "topic").trim();
+  const groupBy =
+    rawGroupBy === "concept" || rawGroupBy === "errorType" || rawGroupBy === "topic"
+      ? rawGroupBy
+      : null;
+  if (!groupBy) {
+    response.status(400).json({ message: "groupBy must be one of: topic, concept, errorType." });
+    return;
+  }
+
+  const assignmentId = String(request.query?.assignmentId || "").trim();
+  if (assignmentId) {
+    const assignment = await findAssignmentById(request.user.id, assignmentId);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+  }
+
+  const limit = clampLimit(request.query?.limit, 20, 100);
+  const items = await listProblemErrorSummary({
+    userId: request.user.id,
+    assignmentId,
+    groupBy,
+    limit,
+  });
+  response.json({
+    scope: assignmentId ? "assignment" : "user",
+    assignmentId: assignmentId || null,
+    groupBy,
+    items,
+  });
+});
+
+app.get("/api/notebooks/quiz-sessions", requireDb, requireAuth, async (request, response) => {
+  const records = await listNotebookQuizSessions(request.user.id);
+  response.json({ sessions: records });
+});
+
+app.get("/api/notebooks/:subjectId/quiz-session", requireDb, requireAuth, async (request, response) => {
+  const record = await getNotebookQuizSession(request.user.id, request.params.subjectId);
+  response.json(
+    record || {
+      id: `${request.user.id}:quiz:${request.params.subjectId}`,
+      userId: request.user.id,
+      subjectId: request.params.subjectId,
+      subjectName: "",
+      attempted: false,
+      solved: false,
+      attemptedAt: null,
+      solvedAt: null,
+      totalQuestions: 0,
+      correctCount: 0,
+      mistakeCount: 0,
+      totalTimeSeconds: 0,
+      updatedAt: 0,
+    },
+  );
+});
+
+app.patch("/api/notebooks/:subjectId/quiz-session", requireDb, requireAuth, async (request, response) => {
+  const subjectName = normalizeBoundedText(request.body?.subjectName, 120);
+  const attempted = request.body?.attempted === true;
+  const solved = request.body?.solved === true;
+  const addTimeSeconds = parseNonNegativeSeconds(request.body?.addTimeSeconds);
+  const totalQuestionsRaw = request.body?.totalQuestions;
+  const correctCountRaw = request.body?.correctCount;
+  const mistakeCountRaw = request.body?.mistakeCount;
+
+  if (addTimeSeconds == null) {
+    response.status(400).json({ message: "addTimeSeconds must be a non-negative number." });
+    return;
+  }
+
+  const numericFields = [
+    ["totalQuestions", totalQuestionsRaw],
+    ["correctCount", correctCountRaw],
+    ["mistakeCount", mistakeCountRaw],
+  ];
+  for (const [label, value] of numericFields) {
+    if (value == null || value === "") continue;
+    if (!Number.isInteger(Number(value)) || Number(value) < 0) {
+      response.status(400).json({ message: `${label} must be a non-negative integer.` });
+      return;
+    }
+  }
+
+  const record = await upsertNotebookQuizSession(request.user.id, request.params.subjectId, {
+    subjectName,
+    attempted,
+    solved,
+    totalQuestions: totalQuestionsRaw,
+    correctCount: correctCountRaw,
+    mistakeCount: mistakeCountRaw,
+    addTimeSeconds,
+  });
+  response.json(record);
+});
 
 app.use((error, _request, response, next) => {
   if (error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE") {

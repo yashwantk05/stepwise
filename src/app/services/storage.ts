@@ -1,6 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const SUBJECTS_KEY = "stepwise_subjects_v1";
 const ASSIGNMENT_SUBJECT_MAP_KEY = "stepwise_assignment_subject_map_v1";
+const LEARNING_ACTIVITY_KEY = "stepwise_learning_activity_v1";
 const DEFAULT_SUBJECT_NAME = "General";
 
 type AnyRecord = Record<string, unknown>;
@@ -10,6 +11,7 @@ interface User {
   name: string;
   email: string;
   provider?: string;
+  avatarUrl?: string;
 }
 
 interface Subject {
@@ -27,6 +29,11 @@ interface Assignment {
   updatedAt?: number;
   subjectId?: string;
   [key: string]: unknown;
+}
+
+interface AssignmentProblem {
+  problemIndex: number;
+  title: string;
 }
 
 interface FileRecord {
@@ -108,6 +115,7 @@ const buildUserHeaders = () =>
         "x-stepwise-user-name": cachedUser.name || "",
         "x-stepwise-user-email": cachedUser.email || "",
         "x-stepwise-user-provider": cachedUser.provider || "",
+        "x-stepwise-user-avatar": cachedUser.avatarUrl || "",
       }
     : {};
 
@@ -170,6 +178,15 @@ const mapEasyAuthUser = (payload: unknown): User | null => {
         "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
       ) || "",
     provider: principal.identityProvider || "",
+    avatarUrl:
+      readClaim(
+        "picture",
+        "urn:google:picture",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/picture",
+        "avatar_url",
+        "profile",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/uri",
+      ) || "",
   };
 };
 
@@ -504,6 +521,39 @@ export const deleteLastProblemFromAssignment = async (
   };
 };
 
+export const listAssignmentProblems = async (assignmentId: string): Promise<AssignmentProblem[]> => {
+  return (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems`)) as AssignmentProblem[];
+};
+
+export const renameAssignmentProblem = async (
+  assignmentId: string,
+  problemIndex: number,
+  title: string,
+): Promise<AssignmentProblem> => {
+  return (await request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ title }),
+  })) as AssignmentProblem;
+};
+
+export const deleteProblemFromAssignment = async (
+  assignmentId: string,
+  problemIndex: number,
+): Promise<{ assignment: Assignment; removedProblemIndex: number; removedArtifacts: boolean }> => {
+  const result = (await request(
+    `/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}`,
+    { method: "DELETE" },
+  )) as { assignment: Assignment; removedProblemIndex: number; removedArtifacts: boolean };
+
+  return {
+    ...result,
+    assignment: withSubjectOnAssignment(result.assignment),
+  };
+};
+
 export const deleteAssignment = async (assignmentId: string): Promise<void> => {
   await request(`/assignments/${encodeURIComponent(assignmentId)}`, {
     method: "DELETE",
@@ -623,3 +673,47 @@ export const deleteProblemImage = async (assignmentId: string, problemIndex: num
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`, {
     method: "DELETE",
   });
+
+const toLocalDateKey = (time: number) => {
+  const date = new Date(time);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const recordLearningActivity = (seconds = 30) => {
+  const activity = readJson<Record<string, number>>(LEARNING_ACTIVITY_KEY, {});
+  const todayKey = toLocalDateKey(Date.now());
+  activity[todayKey] = Math.max(0, Number(activity[todayKey] || 0)) + seconds;
+  writeJson(LEARNING_ACTIVITY_KEY, activity);
+  return activity;
+};
+
+export const getLearningActivity = (): Record<string, number> =>
+  readJson<Record<string, number>>(LEARNING_ACTIVITY_KEY, {});
+
+export const getLearningStreakSummary = () => {
+  const activity = getLearningActivity();
+  const thresholdSeconds = 15 * 60;
+  const today = new Date();
+  let streak = 0;
+
+  for (let offset = 0; offset < 365; offset += 1) {
+    const current = new Date(today);
+    current.setDate(today.getDate() - offset);
+    const key = toLocalDateKey(current.getTime());
+    if (Number(activity[key] || 0) >= thresholdSeconds) {
+      streak += 1;
+      continue;
+    }
+    break;
+  }
+
+  const todayKey = toLocalDateKey(Date.now());
+  return {
+    streak,
+    todaySeconds: Number(activity[todayKey] || 0),
+    todayQualified: Number(activity[todayKey] || 0) >= thresholdSeconds,
+  };
+};

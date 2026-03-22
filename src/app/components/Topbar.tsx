@@ -1,14 +1,31 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { BellRing, Flame } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
   onSignOut: () => void;
   onDeleteAccount: () => void;
+  showSidebarToggle?: boolean;
+  onToggleSidebar?: () => void;
+  streakCount: number;
+  notificationCount: number;
 }
 
-export function Topbar({ user, onSignOut, onDeleteAccount }: TopbarProps) {
+export function Topbar({
+  user,
+  onSignOut,
+  onDeleteAccount,
+  showSidebarToggle = false,
+  onToggleSidebar,
+  streakCount,
+  notificationCount,
+}: TopbarProps) {
   const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [avatarFailed, setAvatarFailed] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const avatarSrc = String(
+    user?.avatarUrl || user?.avatarURL || user?.photoURL || user?.picture || "",
+  ).trim();
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -21,6 +38,10 @@ export function Topbar({ user, onSignOut, onDeleteAccount }: TopbarProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarSrc]);
+
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -32,23 +53,43 @@ export function Topbar({ user, onSignOut, onDeleteAccount }: TopbarProps) {
 
   return (
     <div className="app-topbar">
-      <div style={{ flex: 1 }}></div>
+      <div className="topbar-left">
+        {showSidebarToggle && (
+          <button className="icon-button sidebar-toggle-btn" onClick={onToggleSidebar} title="Open menu" aria-label="Open menu">
+            <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.4">
+              <path d="M3 5h14M3 10h14M3 15h14" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+      </div>
 
       <div className="topbar-actions">
-        <button className="icon-button" title="Notifications">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M10 2a6 6 0 0 1 6 6v3.5l1.5 2v1h-15v-1l1.5-2V8a6 6 0 0 1 6-6z" />
-            <path d="M8 16.5a2 2 0 0 0 4 0" strokeLinecap="round" />
-          </svg>
-        </button>
+        <div className="topbar-streak-pill" title="Learning streak">
+          <Flame size={18} />
+          <span>{streakCount}</span>
+        </div>
 
+        <button className="icon-button notification-button" title="AI Recommendations">
+          <BellRing size={28} strokeWidth={2.2} />
+          {notificationCount > 0 ? <span className="notification-badge">{notificationCount}</span> : null}
+        </button>
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button
-            className="account-button"
+            className={`account-button ${avatarSrc && !avatarFailed ? 'account-button-with-photo' : ''}`}
             onClick={() => setShowAccountMenu(!showAccountMenu)}
             title={user.name}
           >
-            {getInitials(user.name)}
+            {avatarSrc && !avatarFailed ? (
+              <img
+                src={avatarSrc}
+                alt={`${user.name} profile`}
+                className="account-avatar-image"
+                referrerPolicy="no-referrer"
+                onError={() => setAvatarFailed(true)}
+              />
+            ) : (
+              getInitials(user.name)
+            )}
           </button>
 
           {showAccountMenu && (

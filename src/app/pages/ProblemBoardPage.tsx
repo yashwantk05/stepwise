@@ -415,6 +415,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const pageImageUrlRef = useRef("");
   const cropImageRef = useRef<HTMLImageElement>(null);
   const dragStartRef = useRef<any>(null);
+  const selectionPointerIdRef = useRef<number | null>(null);
   const whiteboardAreaRef = useRef<HTMLDivElement>(null);
   const boardSelectionStartRef = useRef<any>(null);
   const hintLevelRef = useRef(1);
@@ -733,21 +734,73 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     }
   };
 
-  const handleSelectionStart = (event: React.PointerEvent) => {
+  const finalizeSelection = useCallback(
+    (
+      currentTarget?: (EventTarget & HTMLDivElement) | null,
+      pointerId?: number,
+    ) => {
+      const activePointerId = selectionPointerIdRef.current;
+      if (!isSelecting && !dragStartRef.current && activePointerId == null) return;
+
+      setIsSelecting(false);
+      dragStartRef.current = null;
+      selectionPointerIdRef.current = null;
+
+      if (
+        currentTarget &&
+        pointerId != null &&
+        activePointerId === pointerId &&
+        typeof currentTarget.hasPointerCapture === "function" &&
+        currentTarget.hasPointerCapture(pointerId)
+      ) {
+        try {
+          currentTarget.releasePointerCapture(pointerId);
+        } catch {
+          // Ignore invalid capture release edge cases across browsers.
+        }
+      }
+
+      setSelectionRect((currentRect: any) => {
+        if (!currentRect || currentRect.width < 6 || currentRect.height < 6) {
+          setPickerStatus("Selection too small. Drag a larger area.");
+          return null;
+        }
+        setPickerStatus("Selection ready. Save cropped image.");
+        return currentRect;
+      });
+    },
+    [isSelecting],
+  );
+
+  const handleSelectionStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
     if (!cropImageRef.current || !pageImageUrl) return;
+    event.preventDefault();
     const imageRect = cropImageRef.current.getBoundingClientRect();
     const startX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
     const startY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
 
     dragStartRef.current = { x: startX, y: startY };
+    selectionPointerIdRef.current = event.pointerId;
     setSelectionRect({ x: startX, y: startY, width: 0, height: 0 });
     setIsSelecting(true);
     setPickerStatus("Selecting crop area...");
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail on some devices; dragging still works without it.
+    }
   };
 
-  const handleSelectionMove = (event: React.PointerEvent) => {
+  const handleSelectionMove = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!isSelecting || !dragStartRef.current || !cropImageRef.current) return;
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    if (event.pointerType === "mouse" && (event.buttons & 1) !== 1) {
+      finalizeSelection(event.currentTarget, event.pointerId);
+      return;
+    }
+    event.preventDefault();
+
     const imageRect = cropImageRef.current.getBoundingClientRect();
     const nextX = clamp(event.clientX - imageRect.left, 0, imageRect.width);
     const nextY = clamp(event.clientY - imageRect.top, 0, imageRect.height);
@@ -762,19 +815,20 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     });
   };
 
-  const handleSelectionEnd = (event: React.PointerEvent) => {
-    if (!isSelecting) return;
-    setIsSelecting(false);
-    dragStartRef.current = null;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    setSelectionRect((currentRect: any) => {
-      if (!currentRect || currentRect.width < 6 || currentRect.height < 6) {
-        setPickerStatus("Selection too small. Drag a larger area.");
-        return null;
-      }
-      setPickerStatus("Selection ready. Save cropped image.");
-      return currentRect;
-    });
+  const handleSelectionEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    event.preventDefault();
+    finalizeSelection(event.currentTarget, event.pointerId);
+  };
+
+  const handleSelectionCancel = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    finalizeSelection(event.currentTarget, event.pointerId);
+  };
+
+  const handleSelectionLostCapture = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (selectionPointerIdRef.current != null && selectionPointerIdRef.current !== event.pointerId) return;
+    finalizeSelection(event.currentTarget, event.pointerId);
   };
 
   const appendLimitedInsights = useCallback((incomingInsights: any[]) => {
@@ -1053,34 +1107,6 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         {!problemImageUrl && <p className="subtle">No problem image set.</p>}
       </section>
 
-      <section className="panel">
-        <h2>Answer Key (LaTeX supported)</h2>
-        <div className="answer-key-editor">
-          <textarea
-            id="answer-key"
-            value={answerKeyDraft}
-            onChange={(e) => setAnswerKeyDraft(e.target.value)}
-            placeholder="Enter expected answer or key steps... Use $x^2$ for inline math or $$\frac{1}{2}$$ for display math."
-            rows={3}
-          />
-          <div className="control-row">
-            <button
-              type="button"
-              onClick={handleSaveAnswerKey}
-              disabled={isSavingAnswerKey}
-            >
-              {isSavingAnswerKey ? "Saving..." : "Save Answer Key"}
-            </button>
-          </div>
-          {problemContextMeta?.answerKey && (
-            <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac' }}>
-              <p className="subtle" style={{ marginBottom: '8px' }}>Preview:</p>
-              <LatexText text={problemContextMeta.answerKey} />
-            </div>
-          )}
-        </div>
-      </section>
-
       <div className="whiteboard-stage">
         <div
           ref={whiteboardAreaRef}
@@ -1199,6 +1225,34 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         </aside>
       </div>
 
+      <section className="panel">
+        <h2>Optional Answer Key</h2>
+        <div className="answer-key-editor">
+          <textarea
+            id="answer-key"
+            value={answerKeyDraft}
+            onChange={(e) => setAnswerKeyDraft(e.target.value)}
+            placeholder="Type the answer key if it is provided with the problem. This will be used to validate the solution."
+            rows={3}
+          />
+          <div className="control-row">
+            <button
+              type="button"
+              onClick={handleSaveAnswerKey}
+              disabled={isSavingAnswerKey}
+            >
+              {isSavingAnswerKey ? "Saving..." : "Save Answer Key"}
+            </button>
+          </div>
+          {problemContextMeta?.answerKey && (
+            <div style={{ marginTop: '12px', padding: '12px', background: '#f0fdf4', borderRadius: '8px', border: '1px solid #86efac' }}>
+              <p className="subtle" style={{ marginBottom: '8px' }}>Preview:</p>
+              <LatexText text={problemContextMeta.answerKey} />
+            </div>
+          )}
+        </div>
+      </section>
+
       {isPickerOpen && (
         <div className="modal-overlay" onClick={closePicker}>
           <div className="panel picker-panel" onClick={(e) => e.stopPropagation()}>
@@ -1227,12 +1281,16 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                   onPointerDown={handleSelectionStart}
                   onPointerMove={handleSelectionMove}
                   onPointerUp={handleSelectionEnd}
+                  onPointerCancel={handleSelectionCancel}
+                  onLostPointerCapture={handleSelectionLostCapture}
                 >
                   <img
                     ref={cropImageRef}
                     src={pageImageUrl}
                     alt={`Page ${selectedPage}`}
                     className="picker-crop-image"
+                    draggable={false}
+                    onDragStart={(event) => event.preventDefault()}
                   />
                   {selectionRect && (
                     <div

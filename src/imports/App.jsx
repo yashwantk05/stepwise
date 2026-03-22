@@ -763,12 +763,18 @@ function ProblemBoardPage({ assignmentId, problemIndex, navigate }) {
   const [isSelecting, setIsSelecting] = useState(false);
   const [isRenderingPage, setIsRenderingPage] = useState(false);
   const [isSavingProblemImage, setIsSavingProblemImage] = useState(false);
+<<<<<<< HEAD:src/App.jsx
+  const [aspectRatio, setAspectRatio] = useState(4 / 3);
+  const [ratioWidth, setRatioWidth] = useState(4);
+  const [ratioHeight, setRatioHeight] = useState(3);
+=======
   const [selectionMode, setSelectionMode] = useState(null);
   const [boardSelectionRect, setBoardSelectionRect] = useState(null);
   const [isBoardSelecting, setIsBoardSelecting] = useState(false);
   const [isAiSelecting, setIsAiSelecting] = useState(false);
   const [selectionResults, setSelectionResults] = useState([]);
   const [isStylePanelOpen, setIsStylePanelOpen] = useState(true);
+>>>>>>> design-workcopy:src/imports/App.jsx
   const analyzeTimerRef = useRef(null);
   const lastSnapshotRef = useRef(null);
   const pdfDocumentRef = useRef(null);

@@ -1,21 +1,24 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import "../styles/index.css";
 import "../styles/app.css";
-import { getCurrentUser, signOut, requestAccountDeletion } from './services/storage';
+import { getCurrentUser, signOut, requestAccountDeletion, getLearningStreakSummary, recordLearningActivity } from './services/storage';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { WhiteboardPage } from './pages/WhiteboardPage';
 import { MyNotesPage } from './pages/MyNotesPage';
+import { StudyToolPage } from './pages/StudyToolPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
 import { ProblemBoardPage } from './pages/ProblemBoardPage';
+import type { StudyToolType } from './services/studyTools';
 
 type Route = 
   | { type: 'dashboard' }
   | { type: 'whiteboard' }
   | { type: 'notes' }
+  | { type: 'study-tool'; tool: StudyToolType; subjectId?: string }
   | { type: 'subject'; subjectId: string }
   | { type: 'assignment'; subjectId: string; assignmentId: string }
   | { type: 'problem'; subjectId: string; assignmentId: string; problemIndex: number };
@@ -26,6 +29,8 @@ function App() {
   const [route, setRoute] = useState<Route>({ type: 'dashboard' });
   const [isCompactLayout, setIsCompactLayout] = useState(() => window.innerWidth <= 1024);
   const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 1024);
+  const [streakCount, setStreakCount] = useState(0);
+  const [notificationCount, setNotificationCount] = useState(0);
 
   useEffect(() => {
     getCurrentUser()
@@ -51,6 +56,21 @@ function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  useEffect(() => {
+    setStreakCount(getLearningStreakSummary().streak);
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) {
+        return;
+      }
+
+      recordLearningActivity(30);
+      setStreakCount(getLearningStreakSummary().streak);
+    }, 30000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
+
   const handleSignOut = useCallback(async () => {
     await signOut();
     setUser(null);
@@ -58,7 +78,7 @@ function App() {
 
   const handleDeleteAccount = useCallback(async () => {
     const confirmed = window.confirm(
-      "Delete your account? This will remove all subjects, assignments, and uploaded files."
+      "Delete your account? This will remove all notebooks, assignments, and uploaded files."
     );
     if (!confirmed) return;
     
@@ -73,6 +93,14 @@ function App() {
       setRoute({ type: 'whiteboard' });
     } else if (page === 'notes') {
       setRoute({ type: 'notes' });
+    } else if (page === 'flashcards') {
+      setRoute({ type: 'study-tool', tool: 'flashcards' });
+    } else if (page === 'quiz') {
+      setRoute({ type: 'study-tool', tool: 'quiz' });
+    } else if (page === 'mind-map') {
+      setRoute({ type: 'study-tool', tool: 'mind-map' });
+    } else if (page === 'revision-sheet') {
+      setRoute({ type: 'study-tool', tool: 'revision-sheet' });
     }
     if (isCompactLayout) {
       setIsSidebarOpen(false);
@@ -99,6 +127,10 @@ function App() {
     setRoute({ type: 'subject', subjectId });
   }, []);
 
+  const openStudyTool = useCallback((tool: StudyToolType, subjectId?: string) => {
+    setRoute({ type: 'study-tool', tool, subjectId });
+  }, []);
+
   if (!authReady) {
     return (
       <div style={{ 
@@ -120,6 +152,7 @@ function App() {
   const getCurrentPage = () => {
     if (route.type === 'dashboard') return 'dashboard';
     if (route.type === 'notes') return 'notes';
+    if (route.type === 'study-tool') return route.tool;
     return 'whiteboard';
   };
 
@@ -147,15 +180,36 @@ function App() {
           onDeleteAccount={handleDeleteAccount}
           showSidebarToggle={isCompactLayout}
           onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
+          streakCount={streakCount}
+          notificationCount={notificationCount}
         />
         
-        {route.type === 'dashboard' && <DashboardPage user={user} />}
+        {route.type === 'dashboard' && (
+          <DashboardPage
+            user={user}
+            onOpenWhiteboard={() => setRoute({ type: 'whiteboard' })}
+            onOpenNotes={() => setRoute({ type: 'notes' })}
+            onOpenStudyTool={openStudyTool}
+            onDashboardMetaChange={({ recommendationCount, streak }) => {
+              setNotificationCount(recommendationCount);
+              setStreakCount(streak);
+            }}
+          />
+        )}
         
         {route.type === 'whiteboard' && (
           <WhiteboardPage onOpenSubject={openSubject} />
         )}
 
-        {route.type === 'notes' && <MyNotesPage />}
+        {route.type === 'notes' && <MyNotesPage onOpenTool={openStudyTool} />}
+
+        {route.type === 'study-tool' && (
+          <StudyToolPage
+            tool={route.tool}
+            initialSubjectId={route.subjectId}
+            onBack={() => setRoute({ type: 'notes' })}
+          />
+        )}
         
         {route.type === 'subject' && (
           <SubjectDetailPage

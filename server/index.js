@@ -487,6 +487,434 @@ Rules:
   }
 };
 
+const cleanJsonBlock = (value) =>
+  String(value || "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+
+const parseJsonObject = (value, fallback) => {
+  try {
+    const parsed = JSON.parse(cleanJsonBlock(value));
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch {
+    // Ignore parse failures and fall back below.
+  }
+  return fallback;
+};
+
+const buildStudyToolPrompt = ({ tool, subject, notesText }) => {
+  const commonRules = `
+You are creating study material from a student's notes.
+
+Subject: ${subject}
+
+Notes:
+${notesText}
+
+Rules:
+- Use only the provided notes.
+- Keep the content accurate and student-friendly.
+- Return valid JSON only.
+- Do not wrap the JSON in markdown fences.
+  `.trim();
+
+  if (tool === "flashcards") {
+    return `
+${commonRules}
+
+Return this JSON shape:
+{
+  "title": "string",
+  "cards": [
+    {
+      "question": "string",
+      "answer": "string",
+      "difficulty": "easy|medium|hard",
+      "tag": "string"
+    }
+  ]
+}
+
+Generate 6 to 10 flashcards. Keep each answer concise but useful.
+    `.trim();
+  }
+
+  if (tool === "quiz") {
+    return `
+${commonRules}
+
+Return this JSON shape:
+{
+  "title": "string",
+  "questions": [
+    {
+      "question": "string",
+      "options": ["string", "string", "string", "string"],
+      "correctIndex": 0,
+      "explanation": "string",
+      "hint": "string",
+      "difficulty": "easy|medium|hard"
+    }
+  ]
+}
+
+Generate 5 to 8 multiple-choice questions with exactly 4 options each.
+Only one option should be correct.
+    `.trim();
+  }
+
+  if (tool === "revision-sheet") {
+    return `
+${commonRules}
+
+Return this JSON shape:
+{
+  "title": "string",
+  "summary": "string",
+  "keyPoints": ["string"],
+  "formulas": ["string"],
+  "commonMistakes": ["string"],
+  "quickChecks": ["string"],
+  "examTips": ["string"]
+}
+
+Make it concise and revision-ready.
+    `.trim();
+  }
+
+  return `
+${commonRules}
+
+Return this JSON shape:
+{
+  "title": "string",
+  "centralTopic": "string",
+  "branches": [
+    {
+      "title": "string",
+      "points": ["string"]
+    }
+  ]
+}
+
+Generate 4 to 6 branches for a clean mind map.
+  `.trim();
+};
+
+const generateStudyToolWithAzure = async ({ tool, subject, notesText }) => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0.3,
+    maxTokens: 1800,
+    messages: [
+      {
+        role: "user",
+        content: buildStudyToolPrompt({ tool, subject, notesText }),
+      },
+    ],
+  });
+
+  if (tool === "flashcards") {
+    const parsed = parseJsonObject(raw, { title: `${subject} Flashcards`, cards: [] });
+    return {
+      title: String(parsed.title || `${subject} Flashcards`),
+      cards: Array.isArray(parsed.cards)
+        ? parsed.cards.map((card) => ({
+            question: String(card?.question || "").trim(),
+            answer: String(card?.answer || "").trim(),
+            difficulty: String(card?.difficulty || "medium").trim().toLowerCase(),
+            tag: String(card?.tag || subject).trim(),
+          })).filter((card) => card.question && card.answer)
+        : [],
+    };
+  }
+
+  if (tool === "quiz") {
+    const parsed = parseJsonObject(raw, { title: `${subject} Quiz`, questions: [] });
+    return {
+      title: String(parsed.title || `${subject} Quiz`),
+      questions: Array.isArray(parsed.questions)
+        ? parsed.questions.map((question) => ({
+            question: String(question?.question || "").trim(),
+            options: Array.isArray(question?.options)
+              ? question.options.map((option) => String(option || "").trim()).slice(0, 4)
+              : [],
+            correctIndex: Number.isInteger(question?.correctIndex) ? question.correctIndex : 0,
+            explanation: String(question?.explanation || "").trim(),
+            hint: String(question?.hint || "").trim(),
+            difficulty: String(question?.difficulty || "medium").trim().toLowerCase(),
+          })).filter((question) => question.question && question.options.length === 4)
+        : [],
+    };
+  }
+
+  if (tool === "revision-sheet") {
+    const parsed = parseJsonObject(raw, {
+      title: `${subject} Revision Sheet`,
+      summary: "",
+      keyPoints: [],
+      formulas: [],
+      commonMistakes: [],
+      quickChecks: [],
+      examTips: [],
+    });
+
+    return {
+      title: String(parsed.title || `${subject} Revision Sheet`),
+      summary: String(parsed.summary || "").trim(),
+      keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      formulas: Array.isArray(parsed.formulas) ? parsed.formulas.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      commonMistakes: Array.isArray(parsed.commonMistakes) ? parsed.commonMistakes.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      quickChecks: Array.isArray(parsed.quickChecks) ? parsed.quickChecks.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      examTips: Array.isArray(parsed.examTips) ? parsed.examTips.map((item) => String(item || "").trim()).filter(Boolean) : [],
+    };
+  }
+
+  const parsed = parseJsonObject(raw, {
+    title: `${subject} Mind Map`,
+    centralTopic: subject,
+    branches: [],
+  });
+
+  return {
+    title: String(parsed.title || `${subject} Mind Map`),
+    centralTopic: String(parsed.centralTopic || subject).trim(),
+    branches: Array.isArray(parsed.branches)
+      ? parsed.branches.map((branch) => ({
+          title: String(branch?.title || "").trim(),
+          points: Array.isArray(branch?.points)
+            ? branch.points.map((point) => String(point || "").trim()).filter(Boolean)
+            : [],
+        })).filter((branch) => branch.title && branch.points.length > 0)
+      : [],
+  };
+};
+
+const buildNoteInsightPrompt = ({ mode, subject, title, content }) => {
+  const common = `
+You are analyzing one student note and extracting structured study help.
+
+Subject: ${subject}
+Note title: ${title}
+Note content:
+${content}
+
+Rules:
+- Use only the note content provided.
+- Return valid JSON only.
+- Do not wrap the JSON in markdown fences.
+  `.trim();
+
+  if (mode === "summary") {
+    return `
+${common}
+
+Return:
+{
+  "summary": "string",
+  "keyPoints": ["string"],
+  "revisionChecklist": ["string"]
+}
+    `.trim();
+  }
+
+  if (mode === "formulas") {
+    return `
+${common}
+
+Return:
+{
+  "formulas": [
+    {
+      "name": "string",
+      "expression": "string",
+      "meaning": "string"
+    }
+  ]
+}
+
+If the note contains no formulas, return an empty formulas array.
+    `.trim();
+  }
+
+  return `
+${common}
+
+Return:
+{
+  "mistakes": [
+    {
+      "mistake": "string",
+      "fix": "string"
+    }
+  ]
+}
+
+Infer likely mistakes only from the concepts present in the notes.
+  `.trim();
+};
+
+const generateNoteInsightWithAzure = async ({ mode, subject, title, content }) => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0.3,
+    maxTokens: 1200,
+    messages: [
+      {
+        role: "user",
+        content: buildNoteInsightPrompt({ mode, subject, title, content }),
+      },
+    ],
+  });
+
+  if (mode === "summary") {
+    const parsed = parseJsonObject(raw, {
+      summary: "",
+      keyPoints: [],
+      revisionChecklist: [],
+    });
+
+    return {
+      summary: String(parsed.summary || "").trim(),
+      keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      revisionChecklist: Array.isArray(parsed.revisionChecklist)
+        ? parsed.revisionChecklist.map((item) => String(item || "").trim()).filter(Boolean)
+        : [],
+    };
+  }
+
+  if (mode === "formulas") {
+    const parsed = parseJsonObject(raw, { formulas: [] });
+    return {
+      formulas: Array.isArray(parsed.formulas)
+        ? parsed.formulas.map((formula) => ({
+            name: String(formula?.name || "").trim(),
+            expression: String(formula?.expression || "").trim(),
+            meaning: String(formula?.meaning || "").trim(),
+          })).filter((formula) => formula.name || formula.expression || formula.meaning)
+        : [],
+    };
+  }
+
+  const parsed = parseJsonObject(raw, { mistakes: [] });
+  return {
+    mistakes: Array.isArray(parsed.mistakes)
+      ? parsed.mistakes.map((mistake) => ({
+          mistake: String(mistake?.mistake || "").trim(),
+          fix: String(mistake?.fix || "").trim(),
+        })).filter((mistake) => mistake.mistake || mistake.fix)
+      : [],
+  };
+};
+
+const generateDashboardInsightsWithAzure = async ({ studentName, notebooks }) => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0.35,
+    maxTokens: 1800,
+    messages: [
+      {
+        role: "user",
+        content: `
+You are generating a student dashboard for StepWise AI.
+
+Student name: ${studentName || "Student"}
+
+Notebook progress data:
+${JSON.stringify(notebooks, null, 2)}
+
+Return valid JSON only in this exact shape:
+{
+  "learningPlan": [
+    { "label": "string", "detail": "string", "value": "string" }
+  ],
+  "recommendations": [
+    { "title": "string", "reason": "string", "action": "string" }
+  ],
+  "mastery": [
+    { "topic": "string", "score": 0, "status": "strong|medium|weak", "focus": "string" }
+  ],
+  "summary": "string"
+}
+
+Rules:
+- Base everything only on the notebook data provided.
+- learningPlan should contain exactly 3 items.
+- recommendations should contain exactly 3 items.
+- mastery should contain one item per notebook.
+- score must be an integer from 0 to 100.
+- Keep all text concise and student-friendly.
+        `.trim(),
+      },
+    ],
+  });
+
+  const parsed = parseJsonObject(raw, {
+    learningPlan: [],
+    recommendations: [],
+    mastery: [],
+    summary: "",
+  });
+
+  return {
+    learningPlan: Array.isArray(parsed.learningPlan)
+      ? parsed.learningPlan.map((item) => ({
+          label: String(item?.label || "").trim(),
+          detail: String(item?.detail || "").trim(),
+          value: String(item?.value || "").trim(),
+        })).filter((item) => item.label)
+      : [],
+    recommendations: Array.isArray(parsed.recommendations)
+      ? parsed.recommendations.map((item) => ({
+          title: String(item?.title || "").trim(),
+          reason: String(item?.reason || "").trim(),
+          action: String(item?.action || "").trim(),
+        })).filter((item) => item.title)
+      : [],
+    mastery: Array.isArray(parsed.mastery)
+      ? parsed.mastery.map((item) => ({
+          topic: String(item?.topic || "").trim(),
+          score: Math.max(0, Math.min(100, Number(item?.score || 0))),
+          status: String(item?.status || "medium").trim().toLowerCase(),
+          focus: String(item?.focus || "").trim(),
+        })).filter((item) => item.topic)
+      : [],
+    summary: String(parsed.summary || "").trim(),
+  };
+};
+
+const extractImageTextWithAzureOpenAI = async (buffer, mimeType = "image/png") => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0.1,
+    maxTokens: 1800,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `
+You are reading a student's notebook page or study notes from an image.
+
+Transcribe the visible notes faithfully into clean plain text.
+
+Rules:
+- Preserve formulas, bullets, headings, and line breaks when possible.
+- Do not summarize.
+- Do not add explanations.
+- If some text is unclear, keep the readable parts and omit only the unreadable fragments.
+- Return plain text only.
+            `.trim(),
+          },
+          createImageUrlPart(buffer, mimeType),
+        ],
+      },
+    ],
+  });
+
+  return String(raw || "").trim();
+};
+
 const getOrigin = (request) => {
   const protocol = request.headers["x-forwarded-proto"] || request.protocol || "https";
   return `${protocol}://${request.get("host")}`;
@@ -821,6 +1249,141 @@ app.post("/api/debug/echo-image", requireAuth, upload.single("file"), (request, 
 });
 
 app.use(express.json({ limit: "2mb" }));
+
+app.post("/api/notes/study-tools", requireAuth, async (request, response) => {
+  const tool = String(request.body?.tool || "").trim().toLowerCase();
+  const subject = String(request.body?.subject || "").trim();
+  const notes = Array.isArray(request.body?.notes) ? request.body.notes : [];
+  const supportedTools = new Set(["flashcards", "quiz", "revision-sheet", "mind-map"]);
+
+  if (!supportedTools.has(tool)) {
+    response.status(400).json({ message: "Unsupported study tool." });
+    return;
+  }
+
+  if (!subject) {
+    response.status(400).json({ message: "Subject is required." });
+    return;
+  }
+
+  const normalizedNotes = notes
+    .map((entry) => ({
+      title: String(entry?.title || "").trim(),
+      content: String(entry?.content || "").trim(),
+    }))
+    .filter((entry) => entry.title || entry.content);
+
+  if (normalizedNotes.length === 0) {
+    response.status(400).json({ message: "At least one note is required to generate study material." });
+    return;
+  }
+
+  const notesText = normalizedNotes
+    .map((entry, index) => `Note ${index + 1}: ${entry.title || "Untitled"}\n${entry.content}`)
+    .join("\n\n---\n\n")
+    .slice(0, 12000);
+
+  try {
+    const output = await generateStudyToolWithAzure({
+      tool,
+      subject,
+      notesText,
+    });
+
+    response.json({
+      tool,
+      subject,
+      output,
+    });
+  } catch (error) {
+    console.error("Study tool generation failed:", error.message);
+    response.status(500).json({ message: "Unable to generate study material right now." });
+  }
+});
+
+app.post("/api/notes/insights", requireAuth, async (request, response) => {
+  const mode = String(request.body?.mode || "").trim().toLowerCase();
+  const subject = String(request.body?.subject || "").trim();
+  const title = String(request.body?.title || "").trim();
+  const content = String(request.body?.content || "").trim();
+  const supportedModes = new Set(["summary", "formulas", "mistakes"]);
+
+  if (!supportedModes.has(mode)) {
+    response.status(400).json({ message: "Unsupported note insight mode." });
+    return;
+  }
+
+  if (!subject) {
+    response.status(400).json({ message: "Subject is required." });
+    return;
+  }
+
+  if (!content) {
+    response.status(400).json({ message: "Note content is required." });
+    return;
+  }
+
+  try {
+    const output = await generateNoteInsightWithAzure({
+      mode,
+      subject,
+      title: title || "Untitled Note",
+      content,
+    });
+
+    response.json({
+      mode,
+      subject,
+      output,
+    });
+  } catch (error) {
+    console.error("Note insight generation failed:", error.message);
+    response.status(500).json({ message: "Unable to analyze this note right now." });
+  }
+});
+
+app.post("/api/notes/extract-image-text", requireAuth, upload.single("file"), async (request, response) => {
+  const file = request.file;
+  if (!file) {
+    response.status(400).json({ message: "Image file is required." });
+    return;
+  }
+
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!allowedTypes.has(file.mimetype)) {
+    response.status(400).json({ message: "Only PNG, JPEG, and WEBP uploads are supported." });
+    return;
+  }
+
+  try {
+    const text = await extractImageTextWithAzureOpenAI(file.buffer, file.mimetype || "image/png");
+    response.json({ text });
+  } catch (error) {
+    console.error("Image note extraction failed:", error.message);
+    response.status(500).json({ message: "Unable to extract notes from this image with Azure OpenAI right now." });
+  }
+});
+
+app.post("/api/dashboard/insights", requireAuth, async (request, response) => {
+  const studentName = String(request.body?.studentName || "").trim();
+  const notebooks = Array.isArray(request.body?.notebooks) ? request.body.notebooks : [];
+
+  if (notebooks.length === 0) {
+    response.status(400).json({ message: "At least one notebook is required." });
+    return;
+  }
+
+  try {
+    const insights = await generateDashboardInsightsWithAzure({
+      studentName,
+      notebooks,
+    });
+    response.json(insights);
+  } catch (error) {
+    console.error("Dashboard insight generation failed:", error.message);
+    response.status(500).json({ message: "Unable to generate dashboard insights right now." });
+  }
+});
 
 app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, response) => {
   const file = request.file;

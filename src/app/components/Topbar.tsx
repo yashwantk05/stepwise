@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { BellRing, Flame } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
@@ -6,6 +7,8 @@ interface TopbarProps {
   onDeleteAccount: () => void;
   showSidebarToggle?: boolean;
   onToggleSidebar?: () => void;
+  streakCount: number;
+  notificationCount: number;
 }
 
 export function Topbar({
@@ -14,6 +17,8 @@ export function Topbar({
   onDeleteAccount,
   showSidebarToggle = false,
   onToggleSidebar,
+  streakCount,
+  notificationCount,
 }: TopbarProps) {
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -59,6 +64,15 @@ export function Topbar({
       </div>
 
       <div className="topbar-actions">
+        <div className="topbar-streak-pill" title="Learning streak">
+          <Flame size={18} />
+          <span>{streakCount}</span>
+        </div>
+
+        <button className="icon-button notification-button" title="AI Recommendations">
+          <BellRing size={28} strokeWidth={2.2} />
+          {notificationCount > 0 ? <span className="notification-badge">{notificationCount}</span> : null}
+        </button>
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button
             className={`account-button ${avatarSrc && !avatarFailed ? 'account-button-with-photo' : ''}`}

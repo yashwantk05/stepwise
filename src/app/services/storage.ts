@@ -1,6 +1,7 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const SUBJECTS_KEY = "stepwise_subjects_v1";
 const ASSIGNMENT_SUBJECT_MAP_KEY = "stepwise_assignment_subject_map_v1";
+const LEARNING_ACTIVITY_KEY = "stepwise_learning_activity_v1";
 const DEFAULT_SUBJECT_NAME = "General";
 
 type AnyRecord = Record<string, unknown>;
@@ -672,3 +673,47 @@ export const deleteProblemImage = async (assignmentId: string, problemIndex: num
   request(`/assignments/${encodeURIComponent(assignmentId)}/problems/${problemIndex}/image`, {
     method: "DELETE",
   });
+
+const toLocalDateKey = (time: number) => {
+  const date = new Date(time);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const recordLearningActivity = (seconds = 30) => {
+  const activity = readJson<Record<string, number>>(LEARNING_ACTIVITY_KEY, {});
+  const todayKey = toLocalDateKey(Date.now());
+  activity[todayKey] = Math.max(0, Number(activity[todayKey] || 0)) + seconds;
+  writeJson(LEARNING_ACTIVITY_KEY, activity);
+  return activity;
+};
+
+export const getLearningActivity = (): Record<string, number> =>
+  readJson<Record<string, number>>(LEARNING_ACTIVITY_KEY, {});
+
+export const getLearningStreakSummary = () => {
+  const activity = getLearningActivity();
+  const thresholdSeconds = 15 * 60;
+  const today = new Date();
+  let streak = 0;
+
+  for (let offset = 0; offset < 365; offset += 1) {
+    const current = new Date(today);
+    current.setDate(today.getDate() - offset);
+    const key = toLocalDateKey(current.getTime());
+    if (Number(activity[key] || 0) >= thresholdSeconds) {
+      streak += 1;
+      continue;
+    }
+    break;
+  }
+
+  const todayKey = toLocalDateKey(Date.now());
+  return {
+    streak,
+    todaySeconds: Number(activity[todayKey] || 0),
+    todayQualified: Number(activity[todayKey] || 0) >= thresholdSeconds,
+  };
+};

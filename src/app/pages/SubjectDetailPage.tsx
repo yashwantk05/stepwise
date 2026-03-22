@@ -28,7 +28,7 @@ export function SubjectDetailPage({ subjectId, onBack, onOpenAssignment }: Subje
       const data = await getSubjectById(subjectId);
       setSubject(data);
     } catch {
-      alert('Subject not found');
+      alert('Notebook not found');
       onBack();
     }
   }, [subjectId, onBack]);
@@ -99,10 +99,10 @@ export function SubjectDetailPage({ subjectId, onBack, onOpenAssignment }: Subje
           <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M15 10H5M5 10l4 4M5 10l4-4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          Back to Subjects
+          Back to Notebooks
         </button>
         <h1>📚 {subject.name}</h1>
-        <p>Manage assignments and problems for this subject</p>
+        <p>Manage assignments and problems for this notebook</p>
       </div>
 
       <div className="form-section mb-3">

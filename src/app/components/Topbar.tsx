@@ -1,12 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { BellRing, Flame } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
   onSignOut: () => void;
   onDeleteAccount: () => void;
+  streakCount: number;
+  notificationCount: number;
 }
 
-export function Topbar({ user, onSignOut, onDeleteAccount }: TopbarProps) {
+export function Topbar({ user, onSignOut, onDeleteAccount, streakCount, notificationCount }: TopbarProps) {
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -35,11 +38,14 @@ export function Topbar({ user, onSignOut, onDeleteAccount }: TopbarProps) {
       <div style={{ flex: 1 }}></div>
 
       <div className="topbar-actions">
-        <button className="icon-button" title="Notifications">
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M10 2a6 6 0 0 1 6 6v3.5l1.5 2v1h-15v-1l1.5-2V8a6 6 0 0 1 6-6z" />
-            <path d="M8 16.5a2 2 0 0 0 4 0" strokeLinecap="round" />
-          </svg>
+        <div className="topbar-streak-pill" title="Learning streak">
+          <Flame size={18} />
+          <span>{streakCount}</span>
+        </div>
+
+        <button className="icon-button notification-button" title="AI Recommendations">
+          <BellRing size={28} strokeWidth={2.2} />
+          {notificationCount > 0 ? <span className="notification-badge">{notificationCount}</span> : null}
         </button>
 
         <div style={{ position: 'relative' }} ref={menuRef}>

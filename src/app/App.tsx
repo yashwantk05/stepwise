@@ -230,9 +230,11 @@ function App() {
         {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
 
         {route.type === 'socratic-tutor' && (
-          <SocraticTutorPage initialContext={route.context as any} />
+          <div className="socratic-page-shell">
+            <SocraticTutorPage initialContext={route.context as any} />
+          </div>
         )}
-
+        
         {route.type === 'study-tool' && (
           <StudyToolPage
             tool={route.tool}

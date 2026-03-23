@@ -51,3 +51,33 @@ export async function generateStudyTool(
 
   return payload;
 }
+
+export async function sendSocraticChat(
+  message: string,
+  history: { role: string; text: string }[],
+  options?: {
+    subjectId?: string;
+    context?: { topic?: string; concept?: string; errorType?: string };
+  }
+) {
+  const response = await fetch(`${API_BASE}/socratic/chat`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildDevHeaders(),
+    },
+    body: JSON.stringify({
+      message,
+      history,
+      ...options,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.message || "Failed to get tutor reply."));
+  }
+
+  return payload as { reply: string; usedNotes: boolean };
+}

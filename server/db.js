@@ -279,6 +279,44 @@ export const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_problem_error_item_concepts_concept
       ON problem_error_item_concepts (concept);
     `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS notebook_subjects (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
+
+    await activePool.query(`
+      CREATE INDEX IF NOT EXISTS idx_notebook_subjects_user
+      ON notebook_subjects (user_id, updated_at DESC);
+    `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS notebook_notes (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        subject_id TEXT NOT NULL REFERENCES notebook_subjects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        tags TEXT[] NOT NULL DEFAULT '{}',
+        source_type TEXT NOT NULL DEFAULT 'text',
+        blob_name TEXT,
+        file_name TEXT,
+        content_type TEXT,
+        file_size BIGINT,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
+
+    await activePool.query(`
+      CREATE INDEX IF NOT EXISTS idx_notebook_notes_subject
+      ON notebook_notes (user_id, subject_id, updated_at DESC);
+    `);
   })();
 
   return initPromise;
@@ -1455,4 +1493,195 @@ export const listProblemErrorSummary = async ({
     [userId, normalizedAssignmentId, safeLimit],
   );
   return rows.map((row) => ({ key: row.key, count: Number(row.count) }));
+};
+
+// ── Notebook subjects ──────────────────────────────────
+
+const mapNotebookSubject = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  name: row.name,
+  createdAt: Number(row.created_at),
+  updatedAt: Number(row.updated_at),
+});
+
+export const listNotebookSubjects = async (userId) => {
+  const { rows } = await getPool().query(
+    `SELECT id, user_id, name, created_at, updated_at
+     FROM notebook_subjects
+     WHERE user_id = $1
+     ORDER BY updated_at DESC;`,
+    [userId],
+  );
+  return rows.map(mapNotebookSubject);
+};
+
+export const getNotebookSubject = async (userId, subjectId) => {
+  const { rows } = await getPool().query(
+    `SELECT id, user_id, name, created_at, updated_at
+     FROM notebook_subjects
+     WHERE user_id = $1 AND id = $2
+     LIMIT 1;`,
+    [userId, subjectId],
+  );
+  if (rows.length === 0) return null;
+  return mapNotebookSubject(rows[0]);
+};
+
+export const insertNotebookSubject = async (userId, name) => {
+  const now = Date.now();
+  const id = `subject-${now}-${Math.random().toString(36).slice(2, 8)}`;
+  await getPool().query(
+    `INSERT INTO notebook_subjects (id, user_id, name, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $4);`,
+    [id, userId, name, now],
+  );
+  return { id, userId, name, createdAt: now, updatedAt: now };
+};
+
+export const removeNotebookSubject = async (userId, subjectId) => {
+  await getPool().query(
+    `DELETE FROM notebook_subjects WHERE user_id = $1 AND id = $2;`,
+    [userId, subjectId],
+  );
+};
+
+// ── Notebook notes ─────────────────────────────────────
+
+const mapNotebookNote = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  subjectId: row.subject_id,
+  title: row.title,
+  content: row.content,
+  tags: Array.isArray(row.tags) ? row.tags : [],
+  sourceType: row.source_type || "text",
+  blobName: row.blob_name || null,
+  fileName: row.file_name || null,
+  contentType: row.content_type || null,
+  fileSize: row.file_size != null ? Number(row.file_size) : null,
+  createdAt: Number(row.created_at),
+  updatedAt: Number(row.updated_at),
+});
+
+export const listNotebookNotes = async (userId, subjectId) => {
+  const { rows } = await getPool().query(
+    `SELECT id, user_id, subject_id, title, content, tags, source_type,
+            blob_name, file_name, content_type, file_size, created_at, updated_at
+     FROM notebook_notes
+     WHERE user_id = $1 AND subject_id = $2
+     ORDER BY updated_at DESC;`,
+    [userId, subjectId],
+  );
+  return rows.map(mapNotebookNote);
+};
+
+export const getNotebookNote = async (userId, noteId) => {
+  const { rows } = await getPool().query(
+    `SELECT id, user_id, subject_id, title, content, tags, source_type,
+            blob_name, file_name, content_type, file_size, created_at, updated_at
+     FROM notebook_notes
+     WHERE user_id = $1 AND id = $2
+     LIMIT 1;`,
+    [userId, noteId],
+  );
+  if (rows.length === 0) return null;
+  return mapNotebookNote(rows[0]);
+};
+
+export const insertNotebookNote = async (userId, subjectId, {
+  title,
+  content = "",
+  tags = [],
+  sourceType = "text",
+  blobName = null,
+  fileName = null,
+  contentType = null,
+  fileSize = null,
+}) => {
+  const now = Date.now();
+  const id = `note-${now}-${Math.random().toString(36).slice(2, 8)}`;
+  const safeTags = Array.isArray(tags) ? tags.filter(Boolean).slice(0, 10) : [];
+  const { rows } = await getPool().query(
+    `INSERT INTO notebook_notes (
+       id, user_id, subject_id, title, content, tags, source_type,
+       blob_name, file_name, content_type, file_size, created_at, updated_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12)
+     RETURNING *;`,
+    [id, userId, subjectId, title, content, safeTags, sourceType,
+     blobName, fileName, contentType, fileSize, now],
+  );
+  return mapNotebookNote(rows[0]);
+};
+
+export const updateNotebookNote = async (userId, noteId, { title, content, tags }) => {
+  const now = Date.now();
+  const safeTags = Array.isArray(tags) ? tags.filter(Boolean).slice(0, 10) : undefined;
+  const { rows } = await getPool().query(
+    `UPDATE notebook_notes
+     SET title = COALESCE($3, title),
+         content = COALESCE($4, content),
+         tags = COALESCE($5, tags),
+         updated_at = $6
+     WHERE user_id = $1 AND id = $2
+     RETURNING *;`,
+    [userId, noteId, title || null, content != null ? content : null, safeTags || null, now],
+  );
+  if (rows.length === 0) return null;
+  return mapNotebookNote(rows[0]);
+};
+
+export const removeNotebookNote = async (userId, noteId) => {
+  const { rows } = await getPool().query(
+    `DELETE FROM notebook_notes
+     WHERE user_id = $1 AND id = $2
+     RETURNING *;`,
+    [userId, noteId],
+  );
+  if (rows.length === 0) return null;
+  return mapNotebookNote(rows[0]);
+};
+
+export const listAllNotebookNotesForUser = async (userId) => {
+  const { rows } = await getPool().query(
+    `SELECT n.id, n.user_id, n.subject_id, n.title, n.content, n.tags, n.source_type,
+            n.blob_name, n.file_name, n.content_type, n.file_size, n.created_at, n.updated_at
+     FROM notebook_notes n
+     WHERE n.user_id = $1
+     ORDER BY n.updated_at DESC;`,
+    [userId],
+  );
+  return rows.map(mapNotebookNote);
+};
+
+export const searchNotebookNotes = async (userId, query, subjectId = null) => {
+  const pattern = `%${query}%`;
+  const sql = subjectId
+    ? `SELECT id, user_id, subject_id, title, content, tags, source_type,
+              blob_name, file_name, content_type, file_size, created_at, updated_at
+       FROM notebook_notes
+       WHERE user_id = $1 AND subject_id = $3
+         AND (title ILIKE $2 OR content ILIKE $2)
+       ORDER BY updated_at DESC
+       LIMIT 50;`
+    : `SELECT id, user_id, subject_id, title, content, tags, source_type,
+              blob_name, file_name, content_type, file_size, created_at, updated_at
+       FROM notebook_notes
+       WHERE user_id = $1
+         AND (title ILIKE $2 OR content ILIKE $2)
+       ORDER BY updated_at DESC
+       LIMIT 50;`;
+  const params = subjectId ? [userId, pattern, subjectId] : [userId, pattern];
+  const { rows } = await getPool().query(sql, params);
+  return rows.map(mapNotebookNote);
+};
+
+export const listNotebookNoteBlobNames = async (userId) => {
+  const { rows } = await getPool().query(
+    `SELECT blob_name FROM notebook_notes
+     WHERE user_id = $1 AND blob_name IS NOT NULL;`,
+    [userId],
+  );
+  return rows.map((r) => r.blob_name).filter(Boolean);
 };

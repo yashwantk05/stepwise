@@ -12,9 +12,11 @@ import {
   downloadProblemImageBufferFromBlob,
   downloadProblemImageFromBlob,
   downloadProblemSceneFromBlob,
+  downloadNoteFileFromBlob,
   uploadAssignmentPdfToBlob,
   uploadProblemImageToBlob,
   uploadProblemSceneToBlob,
+  uploadNoteFileToBlob,
 } from "./blobStorage.js";
 import {
   createProblemErrorAttempt,
@@ -56,7 +58,25 @@ import {
   upsertAssignmentPdf,
   upsertScene,
   upsertUser,
+  listNotebookSubjects,
+  getNotebookSubject,
+  insertNotebookSubject,
+  removeNotebookSubject,
+  listNotebookNotes,
+  getNotebookNote,
+  insertNotebookNote,
+  updateNotebookNote,
+  removeNotebookNote,
+  listAllNotebookNotesForUser,
+  listNotebookNoteBlobNames,
 } from "./db.js";
+import {
+  initSearchIndex,
+  indexNoteChunks,
+  deleteNoteFromIndex,
+  deleteNotebookFromIndex,
+  searchNotes,
+} from "./searchService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1540,6 +1560,341 @@ app.post("/api/notes/extract-image-text", requireAuth, upload.single("file"), as
   }
 });
 
+// ── Notebook Subjects ──────────────────────────────────
+
+app.get("/api/notebooks/subjects", requireAuth, async (request, response) => {
+  try {
+    const subjects = await listNotebookSubjects(request.user.id);
+    response.json(subjects.map((s) => ({ id: s.id, name: s.name, createdAt: s.createdAt, updatedAt: s.updatedAt })));
+  } catch (error) {
+    console.error("List notebook subjects failed:", error.message);
+    response.status(500).json({ message: "Unable to load notebooks." });
+  }
+});
+
+app.post("/api/notebooks/subjects", requireAuth, async (request, response) => {
+  const name = String(request.body?.name || "").trim();
+  if (!name) {
+    response.status(400).json({ message: "Notebook name is required." });
+    return;
+  }
+  try {
+    const subject = await insertNotebookSubject(request.user.id, name);
+    response.status(201).json({ id: subject.id, name: subject.name, createdAt: subject.createdAt, updatedAt: subject.updatedAt });
+  } catch (error) {
+    console.error("Create notebook subject failed:", error.message);
+    response.status(500).json({ message: "Unable to create notebook." });
+  }
+});
+
+app.delete("/api/notebooks/subjects/:subjectId", requireAuth, async (request, response) => {
+  try {
+    const notes = await listNotebookNotes(request.user.id, request.params.subjectId);
+    for (const note of notes) {
+      if (note.blobName) {
+        await deleteBlobIfExists(note.blobName).catch(() => {});
+      }
+    }
+    await removeNotebookSubject(request.user.id, request.params.subjectId);
+    await deleteNotebookFromIndex(request.params.subjectId);
+    response.status(204).end();
+  } catch (error) {
+    console.error("Delete notebook subject failed:", error.message);
+    response.status(500).json({ message: "Unable to delete notebook." });
+  }
+});
+
+// ── Notebook Notes ─────────────────────────────────────
+
+app.get("/api/notebooks/:subjectId/notes", requireAuth, async (request, response) => {
+  try {
+    const notes = await listNotebookNotes(request.user.id, request.params.subjectId);
+    response.json(notes.map((n) => ({
+      id: n.id, title: n.title, content: n.content, tags: n.tags,
+      sourceType: n.sourceType, fileName: n.fileName,
+      updatedAt: n.updatedAt, createdAt: n.createdAt,
+    })));
+  } catch (error) {
+    console.error("List notes failed:", error.message);
+    response.status(500).json({ message: "Unable to load notes." });
+  }
+});
+
+app.post("/api/notebooks/:subjectId/notes", requireAuth, async (request, response) => {
+  const title = String(request.body?.title || "").trim();
+  const content = String(request.body?.content || "").trim();
+  const tags = Array.isArray(request.body?.tags) ? request.body.tags : [];
+  if (!title) {
+    response.status(400).json({ message: "Note title is required." });
+    return;
+  }
+  try {
+    const note = await insertNotebookNote(request.user.id, request.params.subjectId, { title, content, tags, sourceType: "text" });
+    
+    // Index in background
+    getNotebookSubject(request.user.id, request.params.subjectId)
+      .then((subject) => {
+        if (subject) {
+          indexNoteChunks({
+            userId: request.user.id,
+            noteId: note.id,
+            subjectId: request.params.subjectId,
+            subjectName: subject.name,
+            title: note.title,
+            content: note.content,
+            sourceType: note.sourceType,
+            tags: note.tags,
+            updatedAt: note.updatedAt,
+          });
+        }
+      })
+      .catch((e) => console.error("Failed to index note:", e));
+
+    response.status(201).json({
+      id: note.id, title: note.title, content: note.content, tags: note.tags,
+      sourceType: note.sourceType, updatedAt: note.updatedAt, createdAt: note.createdAt,
+    });
+  } catch (error) {
+    console.error("Create note failed:", error.message);
+    response.status(500).json({ message: "Unable to create note." });
+  }
+});
+
+app.patch("/api/notebooks/:subjectId/notes/:noteId", requireAuth, async (request, response) => {
+  const title = request.body?.title != null ? String(request.body.title).trim() : undefined;
+  const content = request.body?.content != null ? String(request.body.content) : undefined;
+  const tags = Array.isArray(request.body?.tags) ? request.body.tags : undefined;
+  try {
+    const updated = await updateNotebookNote(request.user.id, request.params.noteId, { title, content, tags });
+    if (!updated) { response.status(404).json({ message: "Note not found." }); return; }
+    
+    // Update index in background
+    getNotebookSubject(request.user.id, request.params.subjectId)
+      .then((subject) => {
+        if (subject) {
+          indexNoteChunks({
+            userId: request.user.id,
+            noteId: updated.id,
+            subjectId: request.params.subjectId,
+            subjectName: subject.name,
+            title: updated.title,
+            content: updated.content,
+            sourceType: updated.sourceType,
+            tags: updated.tags,
+            updatedAt: updated.updatedAt,
+          });
+        }
+      })
+      .catch((e) => console.error("Failed to re-index note:", e));
+
+    response.json({
+      id: updated.id, title: updated.title, content: updated.content, tags: updated.tags,
+      sourceType: updated.sourceType, updatedAt: updated.updatedAt,
+    });
+  } catch (error) {
+    console.error("Update note failed:", error.message);
+    response.status(500).json({ message: "Unable to update note." });
+  }
+});
+
+app.delete("/api/notebooks/:subjectId/notes/:noteId", requireAuth, async (request, response) => {
+  try {
+    const note = await getNotebookNote(request.user.id, request.params.noteId);
+    if (note?.blobName) { await deleteBlobIfExists(note.blobName).catch(() => {}); }
+    await removeNotebookNote(request.user.id, request.params.noteId);
+    await deleteNoteFromIndex(request.params.noteId);
+    response.status(204).end();
+  } catch (error) {
+    console.error("Delete note failed:", error.message);
+    response.status(500).json({ message: "Unable to delete note." });
+  }
+});
+
+// PDF upload → store blob + create note with extracted text
+app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.single("file"), async (request, response) => {
+  const file = request.file;
+  if (!file) { response.status(400).json({ message: "PDF file is required." }); return; }
+  if (file.mimetype !== "application/pdf") { response.status(400).json({ message: "Only PDF files are supported." }); return; }
+  try {
+    const tempNoteId = `note-${Date.now()}`;
+    const blobResult = await uploadNoteFileToBlob({
+      userId: request.user.id, subjectId: request.params.subjectId,
+      noteId: tempNoteId, fileName: file.originalname || "upload.pdf",
+      contentType: "application/pdf", buffer: file.buffer,
+    });
+    const extractedText = String(request.body?.extractedText || "").trim();
+    const title = String(request.body?.title || file.originalname || "PDF Upload")
+      .replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "PDF Upload";
+    const note = await insertNotebookNote(request.user.id, request.params.subjectId, {
+      title, content: extractedText || `Imported PDF: ${file.originalname || "file.pdf"}`,
+      tags: ["PDF", "Uploaded"], sourceType: "pdf",
+      blobName: blobResult.blobName, fileName: file.originalname || "upload.pdf",
+      contentType: "application/pdf", fileSize: file.size,
+    });
+
+    // Index in background
+    getNotebookSubject(request.user.id, request.params.subjectId)
+      .then((subject) => {
+        if (subject && extractedText) {
+          indexNoteChunks({
+            userId: request.user.id,
+            noteId: note.id,
+            subjectId: request.params.subjectId,
+            subjectName: subject.name,
+            title: note.title,
+            content: note.content,
+            sourceType: note.sourceType,
+            tags: note.tags,
+            updatedAt: note.updatedAt,
+          });
+        }
+      })
+      .catch((e) => console.error("Failed to index PDF note:", e));
+
+    response.status(201).json({
+      id: note.id, title: note.title, content: note.content, tags: note.tags,
+      sourceType: note.sourceType, fileName: note.fileName,
+      updatedAt: note.updatedAt, createdAt: note.createdAt,
+    });
+  } catch (error) {
+    console.error("PDF note upload failed:", error.message);
+    response.status(500).json({ message: "Unable to upload PDF." });
+  }
+});
+
+// Image upload → store blob + OCR extract text → create note
+app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.single("file"), async (request, response) => {
+  const file = request.file;
+  if (!file) { response.status(400).json({ message: "Image file is required." }); return; }
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!allowedTypes.has(file.mimetype)) { response.status(400).json({ message: "Only PNG, JPEG, and WEBP images are supported." }); return; }
+  try {
+    const tempNoteId = `note-${Date.now()}`;
+    const blobResult = await uploadNoteFileToBlob({
+      userId: request.user.id, subjectId: request.params.subjectId,
+      noteId: tempNoteId, fileName: file.originalname || "image.png",
+      contentType: file.mimetype, buffer: file.buffer,
+    });
+    let extractedText = "";
+    try { extractedText = await extractImageTextWithAzureOpenAI(file.buffer, file.mimetype); } catch (ocrErr) {
+      console.error("OCR extraction failed, saving note without text:", ocrErr.message);
+    }
+    const title = String(request.body?.title || file.originalname || "Image Upload")
+      .replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "Image Upload";
+    const note = await insertNotebookNote(request.user.id, request.params.subjectId, {
+      title, content: extractedText || `Imported image: ${file.originalname || "image"}`,
+      tags: ["Notebook Image", "Uploaded"], sourceType: "image",
+      blobName: blobResult.blobName, fileName: file.originalname || "image.png",
+      contentType: file.mimetype, fileSize: file.size,
+    });
+
+    // Index in background
+    getNotebookSubject(request.user.id, request.params.subjectId)
+      .then((subject) => {
+        if (subject && extractedText) {
+          indexNoteChunks({
+            userId: request.user.id,
+            noteId: note.id,
+            subjectId: request.params.subjectId,
+            subjectName: subject.name,
+            title: note.title,
+            content: note.content,
+            sourceType: note.sourceType,
+            tags: note.tags,
+            updatedAt: note.updatedAt,
+          });
+        }
+      })
+      .catch((e) => console.error("Failed to index image note:", e));
+
+    response.status(201).json({
+      id: note.id, title: note.title, content: note.content, tags: note.tags,
+      sourceType: note.sourceType, fileName: note.fileName,
+      updatedAt: note.updatedAt, createdAt: note.createdAt,
+    });
+  } catch (error) {
+    console.error("Image note upload failed:", error.message);
+    response.status(500).json({ message: "Unable to upload image note." });
+  }
+});
+
+// Download original note file
+app.get("/api/notebooks/:subjectId/notes/:noteId/file", requireAuth, async (request, response) => {
+  try {
+    const note = await getNotebookNote(request.user.id, request.params.noteId);
+    if (!note || !note.blobName) { response.status(404).json({ message: "Note file not found." }); return; }
+    const download = await downloadNoteFileFromBlob(note.blobName);
+    if (!download) { response.status(404).json({ message: "File not found in storage." }); return; }
+    response.set("Content-Type", download.contentType);
+    response.set("Content-Disposition", `inline; filename="${note.fileName || "file"}"`);
+    if (download.contentLength) response.set("Content-Length", String(download.contentLength));
+    download.stream.pipe(response);
+  } catch (error) {
+    console.error("Note file download failed:", error.message);
+    response.status(500).json({ message: "Unable to download note file." });
+  }
+});
+
+// Get all notes for a user (knowledge base for Socratic Tutor)
+app.get("/api/notebooks/notes/all", requireAuth, async (request, response) => {
+  try {
+    const notes = await listAllNotebookNotesForUser(request.user.id);
+    response.json(notes.map((n) => ({
+      id: n.id, subjectId: n.subjectId, title: n.title, content: n.content,
+      tags: n.tags, sourceType: n.sourceType, updatedAt: n.updatedAt,
+    })));
+  } catch (error) {
+    console.error("List all notes failed:", error.message);
+    response.status(500).json({ message: "Unable to load notes." });
+  }
+});
+
+// Socratic Tutor endpoint using Azure AI Search knowledge base
+app.post("/api/socratic/chat", requireAuth, async (request, response) => {
+  const message = String(request.body?.message || "").trim();
+  const history = Array.isArray(request.body?.history) ? request.body.history : [];
+  const subjectId = request.body?.subjectId || null;
+  const context = request.body?.context || {}; // { topic, concept, errorType }
+
+  if (!message) {
+    return response.status(400).json({ message: "Message is required." });
+  }
+
+  try {
+    const searchResults = await searchNotes(request.user.id, message, subjectId, 5);
+    
+    let noteContext = "";
+    if (searchResults && searchResults.length > 0) {
+      noteContext = "Relevant notes context from student's notebook:\n" + 
+        searchResults.map((res, i) => `[${i + 1}] Title: ${res.title}\nContent snippet: ${res.chunkText}`).join("\n\n");
+    }
+
+    const systemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.
+Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
+If there is relevant notes context provided below, use it to provide personalized hints or references, but still don't give away the direct answer.
+Current learning context: Topic: ${context.topic || "unknown"}, Concept: ${context.concept || "unknown"}, recent error: ${context.errorType || "none"}.
+
+${noteContext}`;
+
+    const promptMessages = [
+      { role: "system", content: systemPrompt },
+      ...history.map((msg) => ({ role: msg.role === "user" ? "user" : "assistant", content: msg.text })),
+      { role: "user", content: message }
+    ];
+
+    const replyText = await requestAzureChatCompletion({ 
+      messages: promptMessages, 
+      maxTokens: 300, 
+      temperature: 0.5 
+    });
+
+    response.json({ reply: replyText, usedNotes: searchResults.length > 0 });
+  } catch (error) {
+    console.error("Socratic chat failed:", error.message);
+    response.status(500).json({ message: "Unable to process Socratic chat request." });
+  }
+});
+
 app.post("/api/dashboard/insights", requireAuth, async (request, response) => {
   const studentName = String(request.body?.studentName || "").trim();
   const notebooks = Array.isArray(request.body?.notebooks) ? request.body.notebooks : [];
@@ -2756,6 +3111,10 @@ const startServer = async () => {
     await initDb();
     dbReady = true;
     console.log("Database initialized.");
+    
+    // Initialize search index (non-blocking)
+    initSearchIndex().catch(e => console.error("Search index initialization failed:", e));
+    
   } catch (error) {
     dbReady = false;
     dbInitError = error;

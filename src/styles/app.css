@@ -1742,6 +1742,24 @@ textarea {
   line-height: 1.5;
 }
 
+.notes-upload-btn-upcoming {
+  opacity: 0.55;
+  cursor: not-allowed;
+  position: relative;
+}
+
+.notes-upcoming-badge {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #7c3aed;
+  background: #ede9fe;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
 .notes-list {
   display: grid;
   gap: 12px;
@@ -3267,7 +3285,8 @@ textarea {
 }
 
 .socratic-page-shell {
-  height: calc(100vh - 57px);
+  flex: 1;
+  height: calc(100vh - 72px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -3424,8 +3443,6 @@ textarea {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-width: 1000px;
-  padding: 0 18px;
 }
 
 .socratic-chat-scroll {
@@ -3435,18 +3452,21 @@ textarea {
 }
 
 .socratic-chat-scroll::-webkit-scrollbar {
-  width: 4px;
+  width: 6px;
 }
 
 .socratic-chat-scroll::-webkit-scrollbar-thumb {
-  background: var(--line);
+  background: #9ca3af;
   border-radius: 999px;
 }
 
 /* Pinned input bar */
 .socratic-input-wrap {
   flex-shrink: 0;
-  padding: 4px 0 8px;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 4px 18px 8px;
 }
 
 .socratic-input-box {
@@ -3562,7 +3582,10 @@ textarea {
 /* v2 chat/bubble sizing overrides to prevent old styles from adding large padding */
 .socratic-page-v2 .socratic-chat-shell {
   min-height: 0;
-  padding: 0;
+  width: 100%;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 0 18px;
   display: grid;
   gap: 12px;
   align-content: start;
@@ -3580,7 +3603,7 @@ textarea {
 }
 
 .socratic-page-v2 .socratic-bubble-assistant {
-  background: var(--surface-light);
+  background: #e5e7eb;
   border: 1px solid var(--line);
 }
 

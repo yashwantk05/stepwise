@@ -4,6 +4,7 @@ import { SendHorizontal, Mic, Image, Calculator, ChevronUp } from 'lucide-react'
 import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
 import { getErrorSummary, getProblemErrors, listSubjects } from '../services/storage';
+import { sendSocraticChat } from '../services/studyTools';
 
 interface SubjectRecord {
   id: string;
@@ -42,31 +43,6 @@ const extractTopicFromText = (text: string, notebookOptions: string[]) => {
   return '';
 };
 
-const buildSocraticReply = (
-  userText: string,
-  context: TutorContextState,
-  weakTopic: string,
-  recentErrorType: string,
-) => {
-  const topic = context.topic || weakTopic || 'this topic';
-  const concept = context.concept || 'the current step';
-  const errorType = context.errorType || recentErrorType;
-  const lowered = userText.toLowerCase();
-
-  if (errorType) {
-    return `Looks like ${errorType.toLowerCase()} might be involved. Before solving, what changes when you check ${concept.toLowerCase()} inside ${topic.toLowerCase()}?`;
-  }
-
-  if (lowered.includes('stuck') || lowered.includes("don't know")) {
-    return `Let’s shrink the problem. What definition or rule do you know first for ${topic.toLowerCase()}?`;
-  }
-
-  if (lowered.includes('i think') || lowered.includes('maybe')) {
-    return `Nice start. What clue in the problem tells you that idea fits ${topic.toLowerCase()} here?`;
-  }
-
-  return `For ${topic.toLowerCase()}, what does ${concept.toLowerCase()} represent in this step, and which rule should act on it first?`;
-};
 
 export function SocraticTutorPage({
   initialContext,
@@ -96,6 +72,7 @@ export function SocraticTutorPage({
   const [activeMode, setActiveMode] = useState<'voice' | 'image' | 'equation' | null>(null);
   const [activeOption, setActiveOption] = useState<'voice' | 'diagram' | 'steps'>('diagram');
   const [panelOpen, setPanelOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -148,9 +125,9 @@ export function SocraticTutorPage({
     setActiveMode((current) => (current === mode ? null : mode));
   };
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = draft.trim();
-    if (!trimmed) return;
+    if (!trimmed || isLoading) return;
 
     const autoTopic = context.topic || extractTopicFromText(trimmed, notebookOptions);
     const nextContext = {
@@ -160,23 +137,54 @@ export function SocraticTutorPage({
     };
     setContext(nextContext);
 
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    setDraft('');
     setMessages((current) => [
       ...current,
       {
         id: `user-${Date.now()}`,
         role: 'user',
         text: trimmed,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      },
-      {
-        id: `assistant-${Date.now() + 1}`,
-        role: 'assistant',
-        text: buildSocraticReply(trimmed, nextContext, weakTopic, recentErrorType),
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time,
       },
     ]);
-    setDraft('');
-  }, [context, draft, notebookOptions, recentErrorType, weakTopic]);
+    
+    setIsLoading(true);
+
+    try {
+      const history = messages.map(m => ({ role: m.role, text: m.text }));
+      const response = await sendSocraticChat(trimmed, history, {
+        context: {
+          topic: nextContext.topic || weakTopic,
+          concept: nextContext.concept,
+          errorType: nextContext.errorType || recentErrorType,
+        }
+      });
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now() + 1}`,
+          role: 'assistant',
+          text: response.reply + (response.usedNotes ? '\n\n*(Based on your notes)*' : ''),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } catch (err) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now() + 1}`,
+          role: 'assistant',
+          text: 'Oops, something went wrong. Let me think about that again.',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [context, draft, notebookOptions, recentErrorType, weakTopic, isLoading, messages]);
 
 
 

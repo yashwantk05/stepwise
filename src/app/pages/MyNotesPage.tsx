@@ -19,10 +19,12 @@ import {
   createTextNote,
   updateTextNote,
   deleteNote,
+  uploadPdfNote,
+  uploadImageNote,
 } from '../services/storage';
 import type { StudyToolType } from '../services/studyTools';
 import { generateNoteInsight, type NoteInsightMode } from '../services/noteInsights';
-import { extractImageText, extractPdfText, fileNameToTitle } from '../services/noteUploads';
+import { extractPdfText } from '../services/noteUploads';
 
 const formatDate = (time: number) => new Date(time).toLocaleDateString();
 
@@ -283,20 +285,6 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
     }
   };
 
-  const handleImportedNote = async (title: string, content: string, tags: string[]) => {
-    if (!selectedSubjectId) return;
-
-    const newNote = (await createTextNote(selectedSubjectId, {
-      title,
-      content,
-      tags,
-    })) as NoteRecord;
-
-    await loadNotes(selectedSubjectId);
-    setSelectedNoteId(newNote.id);
-    setActiveTab('notes');
-  };
-
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -305,12 +293,10 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
     setLoading(true);
     setUploadMessage('');
     try {
-      const extracted = await extractImageText(file);
-      await handleImportedNote(
-        fileNameToTitle(file.name),
-        extracted || 'No text could be extracted from this notebook image.',
-        ['Notebook Image', 'Uploaded'],
-      );
+      const newNote = (await uploadImageNote(selectedSubjectId, file)) as NoteRecord;
+      await loadNotes(selectedSubjectId);
+      setSelectedNoteId(newNote.id);
+      setActiveTab('notes');
       setUploadMessage('Notebook image imported as a note.');
     } catch (error) {
       setUploadMessage(error instanceof Error ? error.message : 'Unable to import this notebook image.');
@@ -327,12 +313,10 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
     setLoading(true);
     setUploadMessage('');
     try {
-      const extracted = await extractPdfText(file);
-      await handleImportedNote(
-        fileNameToTitle(file.name),
-        extracted || 'No readable text was found in this PDF.',
-        ['PDF', 'Uploaded'],
-      );
+      const newNote = (await uploadPdfNote(selectedSubjectId, file, '')) as NoteRecord;
+      await loadNotes(selectedSubjectId);
+      setSelectedNoteId(newNote.id);
+      setActiveTab('notes');
       setUploadMessage('PDF imported as a note.');
     } catch (error) {
       setUploadMessage(error instanceof Error ? error.message : 'Unable to import this PDF.');

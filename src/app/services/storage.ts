@@ -508,33 +508,44 @@ export const updateTextNote = async (
   }
 };
 
-export const uploadNote = async (subjectId: string, file: File): Promise<Note> => {
-  const notes = await listNotes(subjectId);
-  const noteId = `note-${Date.now()}`;
-  const newNote: Note = {
-    id: noteId,
-    title: file.name,
-    content: `Imported file: ${file.name}`,
-    tags: ["Uploaded"],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    fileName: file.name,
-    size: file.size,
-    uploadedAt: Date.now(),
-  };
+export const uploadPdfNote = async (
+  subjectId: string,
+  file: File,
+  extractedText: string
+): Promise<Note> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("title", file.name);
+  formData.append("extractedText", extractedText);
 
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = String(reader.result || "");
-      localStorage.setItem(`note-${subjectId}-${noteId}`, base64);
-      notes.unshift(newNote);
-      saveNotes(subjectId, notes);
-      resolve(newNote);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  const created = (await request(`/notebooks/${encodeURIComponent(subjectId)}/notes/upload-pdf`, {
+    method: "POST",
+    body: formData,
+  })) as Note;
+
+  const notes = await listNotes(subjectId);
+  notes.unshift(created);
+  saveNotes(subjectId, notes);
+  return created;
+};
+
+export const uploadImageNote = async (
+  subjectId: string,
+  file: File
+): Promise<Note> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("title", file.name);
+
+  const created = (await request(`/notebooks/${encodeURIComponent(subjectId)}/notes/upload-image`, {
+    method: "POST",
+    body: formData,
+  })) as Note;
+
+  const notes = await listNotes(subjectId);
+  notes.unshift(created);
+  saveNotes(subjectId, notes);
+  return created;
 };
 
 export const downloadNoteBlob = async (subjectId: string, noteId: string): Promise<Blob> => {

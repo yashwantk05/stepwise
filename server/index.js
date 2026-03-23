@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import { Buffer } from "node:buffer";
+import pdfParse from "pdf-parse";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -1822,7 +1823,15 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
       noteId: tempNoteId, fileName: file.originalname || "upload.pdf",
       contentType: "application/pdf", buffer: file.buffer,
     });
-    const extractedText = String(request.body?.extractedText || "").trim();
+    let extractedText = String(request.body?.extractedText || "").trim();
+    if (!extractedText || extractedText === "No readable text was found in this PDF.") {
+      try {
+        const parsed = await pdfParse(file.buffer);
+        extractedText = String(parsed.text || "").trim();
+      } catch (err) {
+        console.error("Fallback PDF extraction failed:", err.message);
+      }
+    }
     const title = String(request.body?.title || file.originalname || "PDF Upload")
       .replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "PDF Upload";
     const note = await insertNotebookNote(request.user.id, request.params.subjectId, {

@@ -261,3 +261,24 @@ export const downloadNoteFileFromBlob = async (blobName) => {
     contentLength: Number(response.contentLength || 0),
   };
 };
+
+export const downloadNoteFileBufferFromBlob = async (blobName) => {
+  const container = await requireContainer();
+  const blobClient = container.getBlobClient(blobName);
+  const exists = await blobClient.exists();
+  if (!exists) return null;
+
+  const response = await blobClient.download();
+  const chunks = [];
+  if (!response.readableStreamBody) return null;
+
+  for await (const chunk of response.readableStreamBody) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return {
+    buffer: Buffer.concat(chunks),
+    contentType: response.contentType || "application/octet-stream",
+    contentLength: Number(response.contentLength || 0),
+  };
+};

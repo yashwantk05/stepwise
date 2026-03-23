@@ -6,6 +6,7 @@ interface ChatMessage {
   role: 'assistant' | 'user';
   text: string;
   time: string;
+  images?: { previewUrl: string }[];
 }
 
 export function SocraticChat({ messages }: { messages: ChatMessage[] }) {
@@ -18,6 +19,7 @@ export function SocraticChat({ messages }: { messages: ChatMessage[] }) {
           author={message.role === 'assistant' ? 'Socratic Tutor' : 'You'}
           text={message.text}
           time={message.time}
+          images={message.images}
         />
       ))}
     </section>

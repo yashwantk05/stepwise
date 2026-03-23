@@ -1,6 +1,6 @@
 // REMOVE lines 1–8, REPLACE WITH:
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SendHorizontal, Mic, Image, Calculator, ChevronUp } from 'lucide-react';
+import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus } from 'lucide-react';
 import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
 import { getErrorSummary, getProblemErrors, getUserSettings, listSubjects } from '../services/storage';
@@ -98,11 +98,20 @@ interface ProblemErrorAttemptRecord {
   mistakes?: Array<Record<string, unknown>>;
 }
 
+interface AttachedImage {
+  id: string;
+  file: File;
+  previewUrl: string;
+  base64: string;
+  mimeType: string;
+}
+
 interface ChatMessage {
   id: string;
   role: 'assistant' | 'user';
   text: string;
   time: string;
+  images?: { previewUrl: string }[];
 }
 
 const extractTopicFromText = (text: string, notebookOptions: string[]) => {
@@ -146,7 +155,9 @@ export function SocraticTutorPage({
   const [activeOption, setActiveOption] = useState<'voice' | 'diagram' | 'steps'>('diagram');
   const [panelOpen, setPanelOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recognizerRef = useRef<speechSdk.SpeechRecognizer | null>(null);
@@ -200,12 +211,60 @@ export function SocraticTutorPage({
   };
 
   const toggleMode = (mode: 'voice' | 'image' | 'equation') => {
+    if (mode === 'image') {
+      imageInputRef.current?.click();
+      return;
+    }
     setActiveMode((current) => (current === mode ? null : mode));
+  };
+
+  const fileToAttachedImage = (file: File): Promise<AttachedImage> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        resolve({
+          id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          file,
+          previewUrl: dataUrl,
+          base64: dataUrl.split(',')[1],
+          mimeType: file.type || 'image/png',
+        });
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const allowed = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+    const valid = files.filter(f => allowed.includes(f.type));
+    if (!valid.length) return;
+    const newImages = await Promise.all(valid.map(fileToAttachedImage));
+    setAttachedImages(prev => [...prev, ...newImages].slice(0, 5));
+    // Reset file input so same file can be re-selected
+    if (imageInputRef.current) imageInputRef.current.value = '';
+  };
+
+  const removeAttachedImage = (id: string) => {
+    setAttachedImages(prev => prev.filter(img => img.id !== id));
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = Array.from(e.clipboardData?.items || []);
+    const imageItems = items.filter(item => item.type.startsWith('image/'));
+    if (!imageItems.length) return;
+    e.preventDefault();
+    const files = imageItems.map(item => item.getAsFile()).filter(Boolean) as File[];
+    const newImages = await Promise.all(files.map(fileToAttachedImage));
+    setAttachedImages(prev => [...prev, ...newImages].slice(0, 5));
   };
 
   const handleSend = useCallback(async (audioBase64?: string) => {
     const trimmed = draft.trim();
-    if (!trimmed && !audioBase64 || isLoading) return;
+    const hasImages = attachedImages.length > 0;
+    if ((!trimmed && !audioBase64 && !hasImages) || isLoading) return;
 
     const autoTopic = context.topic || extractTopicFromText(trimmed, notebookOptions);
     const nextContext = {
@@ -217,14 +276,23 @@ export function SocraticTutorPage({
 
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    // Capture current images for the message before clearing
+    const currentImages = [...attachedImages];
+    const imagePayloads = currentImages.map(img => ({
+      base64: img.base64,
+      mimeType: img.mimeType,
+    }));
+
     setDraft('');
+    setAttachedImages([]);
     setMessages((current) => [
       ...current,
       {
         id: `user-${Date.now()}`,
         role: 'user',
-        text: trimmed || "(Voice input)",
+        text: trimmed || (hasImages ? '' : '(Voice input)'),
         time,
+        images: currentImages.map(img => ({ previewUrl: img.previewUrl })),
       },
     ]);
     
@@ -236,6 +304,7 @@ export function SocraticTutorPage({
       const response = await sendSocraticChat(trimmed, history, {
         classLevel: selectedClassLevel || undefined,
         audioBase64,
+        images: imagePayloads.length > 0 ? imagePayloads : undefined,
         context: {
           topic: nextContext.topic || weakTopic,
           concept: nextContext.concept,
@@ -265,7 +334,7 @@ export function SocraticTutorPage({
     } finally {
       setIsLoading(false);
     }
-  }, [context, draft, notebookOptions, recentErrorType, weakTopic, isLoading, messages]);
+  }, [context, draft, attachedImages, notebookOptions, recentErrorType, weakTopic, isLoading, messages]);
 
   const stopRecording = useCallback(() => {
     setIsRecording(false);
@@ -442,6 +511,34 @@ export function SocraticTutorPage({
           {/* Pinned input bar */}
           <div className="socratic-input-wrap">
             <div className="socratic-input-box">
+              {/* Image preview strip */}
+              {attachedImages.length > 0 && (
+                <div className="socratic-image-previews">
+                  {attachedImages.map(img => (
+                    <div key={img.id} className="socratic-image-thumb">
+                      <img src={img.previewUrl} alt="Attached" />
+                      <button
+                        type="button"
+                        className="socratic-image-remove"
+                        onClick={() => removeAttachedImage(img.id)}
+                        title="Remove image"
+                      >
+                        <X size={10} />
+                      </button>
+                    </div>
+                  ))}
+                  {attachedImages.length < 5 && (
+                    <button
+                      type="button"
+                      className="socratic-image-add-more"
+                      onClick={() => imageInputRef.current?.click()}
+                      title="Add another image"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
               {activeMode === 'equation' ? (
                 <MathInput draft={draft} setDraft={setDraft} onEnter={() => handleSend()} />
               ) : (
@@ -449,11 +546,21 @@ export function SocraticTutorPage({
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder="Ask about a step, paste a problem, or describe where you got stuck…"
+                  onPaste={handlePaste}
+                  placeholder={attachedImages.length > 0 ? 'Add a message about these images…' : 'Ask about a step, paste a problem, or describe where you got stuck…'}
                   rows={1}
                   className="socratic-input-textarea"
                 />
               )}
+              {/* Hidden file input */}
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                multiple
+                onChange={handleImageSelect}
+                style={{ display: 'none' }}
+              />
               <div className="socratic-input-row">
                 <div className="socratic-mode-icons">
                   <button
@@ -466,11 +573,11 @@ export function SocraticTutorPage({
                   </button>
                   <button
                     type="button"
-                    className={`socratic-mode-icon ${activeMode === 'image' ? 'active' : ''}`}
+                    className={`socratic-mode-icon ${attachedImages.length > 0 ? 'active' : ''}`}
                     onClick={() => toggleMode('image')}
-                    title="Image"
+                    title="Attach image"
                   >
-                    <Image size={15} />
+                    <ImageIcon size={15} />
                   </button>
                   <button
                     type="button"
@@ -485,7 +592,7 @@ export function SocraticTutorPage({
                   type="button"
                   className="socratic-send-btn"
                   onClick={() => handleSend()}
-                  disabled={!draft.trim()}
+                  disabled={!draft.trim() && attachedImages.length === 0}
                 >
                   <SendHorizontal size={15} />
                 </button>

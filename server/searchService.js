@@ -37,8 +37,30 @@ export const initSearchIndex = async () => {
   const indexClient = new SearchIndexClient(endpoint, credential);
 
   try {
-    await indexClient.getIndex(indexName);
+    const existingIndex = await indexClient.getIndex(indexName);
     console.log(`Search index '${indexName}' already exists.`);
+    
+    // Check if new multimodal fields exist, add them if missing
+    const existingFieldNames = new Set(existingIndex.fields.map(f => f.name));
+    const newFields = [];
+    if (!existingFieldNames.has("blobName")) {
+      newFields.push({ name: "blobName", type: "Edm.String", filterable: true });
+    }
+    if (!existingFieldNames.has("sourceContentType")) {
+      newFields.push({ name: "sourceContentType", type: "Edm.String", filterable: true });
+    }
+    
+    if (newFields.length > 0) {
+      console.log(`Adding ${newFields.length} new field(s) to index: ${newFields.map(f => f.name).join(", ")}`);
+      existingIndex.fields.push(...newFields);
+      try {
+        await indexClient.createOrUpdateIndex(existingIndex);
+        console.log("Index schema updated successfully.");
+      } catch (updateErr) {
+        console.error("Failed to update index schema:", updateErr.message);
+      }
+    }
+    
     return true;
   } catch (err) {
     if (err.statusCode !== 404) {
@@ -63,6 +85,8 @@ export const initSearchIndex = async () => {
       { name: "sourceType", type: "Edm.String", filterable: true },
       { name: "tags", type: "Collection(Edm.String)", searchable: true, filterable: true },
       { name: "updatedAt", type: "Edm.Int64", filterable: true, sortable: true },
+      { name: "blobName", type: "Edm.String", filterable: true },
+      { name: "sourceContentType", type: "Edm.String", filterable: true },
       {
         name: "contentVector",
         type: "Collection(Edm.Single)",
@@ -153,7 +177,7 @@ const chunkText = (text, maxLength = 2000, overlap = 200) => {
   return chunks;
 };
 
-export const indexNoteChunks = async ({ userId, noteId, subjectId, subjectName, title, content, sourceType, tags, updatedAt }) => {
+export const indexNoteChunks = async ({ userId, noteId, subjectId, subjectName, title, content, sourceType, tags, updatedAt, blobName, contentType }) => {
   const config = getSearchConfig();
   if (!config || !content) return;
 
@@ -183,12 +207,15 @@ export const indexNoteChunks = async ({ userId, noteId, subjectId, subjectName, 
       sourceType: sourceType || "text",
       tags: tags || [],
       contentVector: embedding || [],
-      updatedAt: Number(updatedAt) || Date.now()
+      updatedAt: Number(updatedAt) || Date.now(),
+      blobName: blobName || "",
+      sourceContentType: contentType || "",
     });
   }
 
   try {
     await searchClient.uploadDocuments(batch);
+    console.log(`Indexed ${batch.length} chunk(s) for note ${noteId} (blobName: ${blobName || 'none'})`);
   } catch (err) {
     console.error(`Failed to index note chunks for ${noteId}:`, err);
   }
@@ -266,7 +293,7 @@ export const searchNotes = async (userId, query, subjectId = null, topK = 5) => 
     const searchOptions = {
       top: topK,
       filter,
-      select: ["noteId", "subjectId", "title", "chunkText", "tags", "sourceType"]
+      select: ["noteId", "subjectId", "title", "chunkText", "tags", "sourceType", "blobName", "sourceContentType"]
     };
 
     if (queryEmbedding && queryEmbedding.length === 1536) {

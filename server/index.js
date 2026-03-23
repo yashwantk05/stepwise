@@ -16,6 +16,7 @@ import {
   downloadProblemImageFromBlob,
   downloadProblemSceneFromBlob,
   downloadNoteFileFromBlob,
+  downloadNoteFileBufferFromBlob,
   uploadAssignmentPdfToBlob,
   uploadProblemImageToBlob,
   uploadProblemSceneToBlob,
@@ -1751,6 +1752,8 @@ app.post("/api/notebooks/:subjectId/notes", requireAuth, async (request, respons
             sourceType: note.sourceType,
             tags: note.tags,
             updatedAt: note.updatedAt,
+            blobName: note.blobName || "",
+            contentType: note.contentType || "",
           });
         }
       })
@@ -1788,6 +1791,8 @@ app.patch("/api/notebooks/:subjectId/notes/:noteId", requireAuth, async (request
             sourceType: updated.sourceType,
             tags: updated.tags,
             updatedAt: updated.updatedAt,
+            blobName: updated.blobName || "",
+            contentType: updated.contentType || "",
           });
         }
       })
@@ -1860,6 +1865,8 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
             sourceType: note.sourceType,
             tags: note.tags,
             updatedAt: note.updatedAt,
+            blobName: note.blobName || "",
+            contentType: note.contentType || "",
           });
         }
       })
@@ -1916,6 +1923,8 @@ app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.sin
             sourceType: note.sourceType,
             tags: note.tags,
             updatedAt: note.updatedAt,
+            blobName: note.blobName || "",
+            contentType: note.contentType || "",
           });
         }
       })
@@ -1963,6 +1972,81 @@ app.get("/api/notebooks/notes/all", requireAuth, async (request, response) => {
   }
 });
 
+// Re-index all notes for a user (backfill blobName/contentType for multimodal RAG)
+app.post("/api/notebooks/reindex", requireAuth, async (request, response) => {
+  try {
+    const notes = await listAllNotebookNotesForUser(request.user.id);
+    const subjects = await listNotebookSubjects(request.user.id);
+    const subjectMap = new Map(subjects.map((s) => [s.id, s.name]));
+
+    let indexed = 0;
+    let skipped = 0;
+
+    for (const note of notes) {
+      if (!note.content || note.content.startsWith("Imported PDF:") || note.content.startsWith("Imported image:")) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        await indexNoteChunks({
+          userId: request.user.id,
+          noteId: note.id,
+          subjectId: note.subjectId,
+          subjectName: subjectMap.get(note.subjectId) || "Untitled Subject",
+          title: note.title,
+          content: note.content,
+          sourceType: note.sourceType,
+          tags: note.tags,
+          updatedAt: note.updatedAt,
+          blobName: note.blobName || "",
+          contentType: note.contentType || "",
+        });
+        indexed++;
+      } catch (err) {
+        console.error(`Failed to re-index note ${note.id}:`, err.message);
+        skipped++;
+      }
+    }
+
+    console.log(`Re-index complete: ${indexed} indexed, ${skipped} skipped out of ${notes.length} total`);
+    response.json({ total: notes.length, indexed, skipped });
+  } catch (error) {
+    console.error("Re-index failed:", error.message);
+    response.status(500).json({ message: "Unable to re-index notes." });
+  }
+});
+
+// Debug: inspect what's in the search index for the current user
+app.get("/api/debug/search-index", requireAuth, async (request, response) => {
+  if (!isDebugRoutesEnabled()) {
+    return response.status(404).json({ message: "Not found." });
+  }
+
+  try {
+    const testQuery = String(request.query?.q || "*").trim();
+    const topK = Math.min(20, Math.max(1, Number(request.query?.top) || 10));
+    const results = await searchNotes(request.user.id, testQuery, null, topK);
+
+    response.json({
+      query: testQuery,
+      resultCount: results.length,
+      results: results.map((r) => ({
+        noteId: r.noteId,
+        title: r.title,
+        chunkPreview: String(r.chunkText || "").slice(0, 300),
+        sourceType: r.sourceType,
+        tags: r.tags,
+        blobName: r.blobName || null,
+        sourceContentType: r.sourceContentType || null,
+      })),
+    });
+  } catch (error) {
+    console.error("Debug search failed:", error.message);
+    response.status(500).json({ message: "Search debug failed.", error: error.message });
+  }
+});
+
 // Socratic Tutor endpoint using Azure AI Search knowledge base
 app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const message = String(request.body?.message || "").trim();
@@ -1970,22 +2054,56 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const subjectId = request.body?.subjectId || null;
   const context = request.body?.context || {}; // { topic, concept, errorType }
   const audioBase64 = String(request.body?.audioBase64 || "").trim();
+  const images = Array.isArray(request.body?.images) ? request.body.images : [];
   const rawClassLevel = Number(request.body?.classLevel);
   const classLevel =
     Number.isInteger(rawClassLevel) && rawClassLevel >= 1 && rawClassLevel <= 12 ? rawClassLevel : null;
 
-  if (!message && !audioBase64) {
-    return response.status(400).json({ message: "Message or audio is required." });
+  if (!message && !audioBase64 && images.length === 0) {
+    return response.status(400).json({ message: "Message, audio, or image is required." });
   }
 
   try {
     const searchQuery = message || "student question";
     const searchResults = await searchNotes(request.user.id, searchQuery, subjectId, 5);
     
+    // Build text context from search results
     let noteContext = "";
     if (searchResults && searchResults.length > 0) {
       noteContext = "Relevant notes context from student's notebook:\n" + 
         searchResults.map((res, i) => `[${i + 1}] Title: ${res.title}\nContent snippet: ${res.chunkText}`).join("\n\n");
+    }
+
+    // Fetch source images for multimodal context (image notes + PDF pages)
+    const retrievedImages = [];
+    if (searchResults && searchResults.length > 0) {
+      // Deduplicate by blobName to avoid fetching the same image multiple times
+      const seenBlobs = new Set();
+      for (const res of searchResults) {
+        const blob = res.blobName;
+        const ct = res.sourceContentType || "";
+        if (!blob || seenBlobs.has(blob)) continue;
+        seenBlobs.add(blob);
+
+        // Only fetch image blobs (not PDFs yet — PDF page rendering can be added later)
+        const isImage = ct.startsWith("image/");
+        if (!isImage) continue;
+
+        try {
+          const download = await downloadNoteFileBufferFromBlob(blob);
+          if (download?.buffer) {
+            const mimeType = download.contentType || ct || "image/png";
+            retrievedImages.push({
+              base64: download.buffer.toString("base64"),
+              mimeType,
+              title: res.title,
+            });
+          }
+        } catch (err) {
+          console.warn(`Failed to download note image blob '${blob}':`, err.message);
+        }
+      }
+      console.log(`Multimodal RAG: retrieved ${retrievedImages.length} source image(s) for ${searchResults.length} search result(s)`);
     }
 
     const systemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.
@@ -1993,24 +2111,57 @@ Ask probing questions, break down problems, and guide them to their own realizat
 Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
 If there is relevant notes context provided below, use it to provide personalized hints or references, but still don't give away the direct answer.
 If the student sends audio, transcribe their speech internally and respond to the content of what they said.
+If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and guide the student based on the visual content.
+If source images from the student's notebook are included in this conversation, use them to provide visual references and better explanations. Reference specific diagrams or figures when helpful.
 Current learning context: Topic: ${context.topic || "unknown"}, Concept: ${context.concept || "unknown"}, recent error: ${context.errorType || "none"}.
 
 ${noteContext}`;
 
-    // Build user content — multimodal when audio is present
+    // Build user content — multimodal when audio, user images, or retrieved images are present
     let userContent;
-    if (audioBase64) {
+    const hasMultimodal = audioBase64 || images.length > 0 || retrievedImages.length > 0;
+    if (hasMultimodal) {
       userContent = [];
       if (message) {
         userContent.push({ type: "text", text: message });
       }
-      userContent.push({
-        type: "input_audio",
-        input_audio: {
-          data: audioBase64,
-          format: "webm",
-        },
-      });
+      // Add user-attached images
+      for (const img of images) {
+        const mimeType = img.mimeType || "image/png";
+        userContent.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${mimeType};base64,${img.base64}`,
+          },
+        });
+      }
+      // Add retrieved note images (multimodal RAG context)
+      for (const rImg of retrievedImages) {
+        userContent.push({
+          type: "text",
+          text: `[Source diagram from notes: "${rImg.title}"]`,
+        });
+        userContent.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${rImg.mimeType};base64,${rImg.base64}`,
+          },
+        });
+      }
+      // Add audio if present
+      if (audioBase64) {
+        userContent.push({
+          type: "input_audio",
+          input_audio: {
+            data: audioBase64,
+            format: "webm",
+          },
+        });
+      }
+      // If no text was provided but images are, add a default prompt
+      if (!message && images.length > 0 && !audioBase64) {
+        userContent.unshift({ type: "text", text: "I'm sharing this image with you. Can you help me understand or solve what's shown here?" });
+      }
     } else {
       userContent = message;
     }
@@ -2027,7 +2178,11 @@ ${noteContext}`;
       temperature: 0.5 
     });
 
-    response.json({ reply: replyText, usedNotes: searchResults.length > 0 });
+    response.json({ 
+      reply: replyText, 
+      usedNotes: searchResults.length > 0,
+      usedNoteImages: retrievedImages.length > 0,
+    });
   } catch (error) {
     console.error("Socratic chat failed:", error.message);
     response.status(500).json({ message: "Unable to process Socratic chat request." });

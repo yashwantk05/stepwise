@@ -60,6 +60,7 @@ export async function sendSocraticChat(
     classLevel?: number;
     context?: { topic?: string; concept?: string; errorType?: string };
     audioBase64?: string;
+    images?: { base64: string; mimeType: string }[];
   }
 ) {
   const response = await fetch(`${API_BASE}/socratic/chat`, {
@@ -81,7 +82,7 @@ export async function sendSocraticChat(
     throw new Error(String(payload?.message || "Failed to get tutor reply."));
   }
 
-  return payload as { reply: string; usedNotes: boolean };
+  return payload as { reply: string; usedNotes: boolean; usedNoteImages: boolean };
 }
 
 export async function getSpeechToken(): Promise<{ token: string; region: string }> {

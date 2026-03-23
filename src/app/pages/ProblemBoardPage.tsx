@@ -252,7 +252,17 @@ const deriveInsightsFromAiResult = (result: any, requestedMode: string) => {
     });
   }
 
-  return entries.map((entry, index) => ({
+  const seen = new Set<string>();
+  const uniqueEntries = entries.filter((entry) => {
+    const key = `${String(entry.kind || "").trim().toLowerCase()}::${String(entry.content || "")
+      .trim()
+      .toLowerCase()}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return uniqueEntries.map((entry, index) => ({
     id: "ai-" + Date.now() + "-" + index,
     kind: entry.kind,
     title: entry.title,
@@ -399,14 +409,19 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const [, setHint] = useState("Start drawing to receive hints.");
   const [initialScene, setInitialScene] = useState(getDefaultScene());
   const latestSceneRef = useRef(getDefaultScene());
-  const insights = useMemo(
+  const persistedInsights = useMemo(
     () => parseInsightsForProblem(assignment, problemIndex),
     [assignment, problemIndex],
   );
   const [manualInsights, setManualInsights] = useState<any[]>([]);
   const combinedInsights = useMemo(
-    () => [...insights, ...manualInsights],
-    [insights, manualInsights],
+    () => [
+      ...persistedInsights.filter(
+        (entry) => entry.kind === "calculate" || entry.kind === "explain",
+      ),
+      ...manualInsights,
+    ],
+    [persistedInsights, manualInsights],
   );
   const hintInsights = useMemo(
     () =>
@@ -445,7 +460,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const [isBoardSelecting, setIsBoardSelecting] = useState(false);
   const [isAiSelecting, setIsAiSelecting] = useState(false);
   const [isStylePanelOpen, setIsStylePanelOpen] = useState(true);
-  const [debugHintImage, setDebugHintImage] = useState<{
+  const [, setDebugHintImage] = useState<{
     url: string;
     width: number;
     height: number;
@@ -485,6 +500,14 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       }
       return null;
     });
+  }, []);
+
+  const clearTransientFeedback = useCallback(() => {
+    setManualInsights((previous) =>
+      previous.filter((entry) => entry.kind === "calculate" || entry.kind === "explain"),
+    );
+    previousHintsRef.current = [];
+    hintLevelRef.current = 1;
   }, []);
 
   const loadProblemImage = useCallback(async () => {
@@ -621,6 +644,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     async (elements: any, appState: any, files: any) => {
       const renderableElements = getRenderableElements(elements);
       if (renderableElements.length === 0) {
+        clearTransientFeedback();
         setHint("Start drawing to receive hints.");
         return;
       }
@@ -656,6 +680,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       if (base64 === lastSnapshotRef.current) return;
       lastSnapshotRef.current = base64;
 
+      clearTransientFeedback();
       setHint("Generating hint...");
       try {
         const result = await analyzeDrawing(blob, {
@@ -675,11 +700,13 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           hintLevelRef.current = Math.min(4, hintLevelRef.current + 1);
         }
         setManualInsights((previous) => {
-          const withoutOldErrors = previous.filter((entry) => entry.kind !== "wrong");
+          const preservedSelectionInsights = previous.filter(
+            (entry) => entry.kind === "calculate" || entry.kind === "explain",
+          );
           if (nextInsights.length === 0) {
-            return withoutOldErrors;
+            return preservedSelectionInsights;
           }
-          return mergeLimitedInsights(withoutOldErrors, nextInsights);
+          return mergeLimitedInsights(preservedSelectionInsights, nextInsights);
         });
 
         setHint("AI feedback updated.");
@@ -687,7 +714,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         setHint("Hint service unavailable.");
       }
     },
-    [assignmentId, blobToBase64, problemImageUrl, problemIndex],
+    [assignmentId, blobToBase64, clearTransientFeedback, problemImageUrl, problemIndex],
   );
 
   const handleChange = useCallback((elements: any, appState: any, files: any) => {
@@ -1219,29 +1246,6 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
           <div className="insights-panel">
             <h2>Recommendations</h2>
-
-            {isDebugImagesEnabled() && debugHintImage && (
-              <div className="insight-group">
-                <h3>Debug Export</h3>
-                <details className="insight-item insight-item-explain" open>
-                  <summary>Latest whiteboard PNG sent to AI</summary>
-                  <p className="subtle">
-                    {debugHintImage.width} x {debugHintImage.height} px, {debugHintImage.bytes} bytes
-                  </p>
-                  <img
-                    src={debugHintImage.url}
-                    alt="Latest whiteboard export sent to AI"
-                    style={{
-                      width: "100%",
-                      display: "block",
-                      borderRadius: "10px",
-                      border: "1px solid #dbe4ff",
-                      background: "#fff",
-                    }}
-                  />
-                </details>
-              </div>
-            )}
 
             {wrongInsights.length > 0 && (
               <div className="insight-group">

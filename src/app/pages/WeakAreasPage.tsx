@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Lightbulb, Target, TrendingDown } from 'lucide-react';
+import { AlertTriangle, Lightbulb, TrendingDown } from 'lucide-react';
 import { HeatmapChart, HeatmapDatum } from '../components/HeatmapChart';
 import { InsightsAccordion, NotebookInsightData } from '../components/InsightsAccordion';
 import { WeakTopicCard } from '../components/WeakTopicCard';
@@ -36,52 +36,12 @@ interface WeakTopic {
   mistakes: number;
 }
 
-interface NotebookProgressPlan {
-  subjectId: string;
+interface ProblemHint {
   notebook: string;
-  practiceLabel: string;
-  currentAccuracy: number;
-  targetAccuracy: number;
-  solvedProblems: number;
-  totalProblems: number;
-  weeks: number;
-  resumeAssignmentId: string;
-  resumeProblemIndex: number;
-}
-
-interface PerformanceSnapshot {
-  problemsSolved: number;
-  mistakes: number;
-  totalQuestions: number;
-  timeSpentMinutes: number;
-  quizzesAttempted: number;
-}
-
-interface ProblemProgressRecord {
-  assignmentId: string;
+  assignmentTitle: string;
   problemIndex: number;
-  attempted: boolean;
-  solved: boolean;
-  mistakeCount: number;
-  totalTimeSeconds: number;
-}
-
-interface ProblemErrorSummaryRecord {
-  assignmentId: string;
-  groupBy: 'topic' | 'concept' | 'errorType';
-  label: string;
-  count: number;
-}
-
-interface NotebookQuizSessionRecord {
-  subjectId: string;
-  subjectName: string;
-  attempted: boolean;
-  solved: boolean;
-  totalQuestions: number;
-  correctCount: number;
-  mistakeCount: number;
-  totalTimeSeconds: number;
+  rawText: string;
+  normalizedText: string;
 }
 
 const WRONG_STEP_MATCHER =
@@ -203,162 +163,6 @@ const buildFixExplanation = (title: string, errors: string[]) => {
   return 'Rebuild the method in smaller checkpoints so you can verify accuracy before the final answer.';
 };
 
-// Temporary placeholders until the database-backed analytics tables are available.
-const DUMMY_PROGRESS_DATA: NotebookProgressPlan[] = [
-  {
-    subjectId: 'subject-algebra',
-    notebook: 'Fractions',
-    practiceLabel: 'Do 5 problems daily',
-    currentAccuracy: 45,
-    targetAccuracy: 80,
-    solvedProblems: 18,
-    totalProblems: 40,
-    weeks: 2,
-    resumeAssignmentId: 'assignment-fractions-1',
-    resumeProblemIndex: 19,
-  },
-  {
-    subjectId: 'subject-general',
-    notebook: 'Word Problems',
-    practiceLabel: 'Practice 3 problems daily',
-    currentAccuracy: 52,
-    targetAccuracy: 75,
-    solvedProblems: 21,
-    totalProblems: 39,
-    weeks: 3,
-    resumeAssignmentId: 'assignment-word-problems-1',
-    resumeProblemIndex: 22,
-  },
-  {
-    subjectId: 'subject-algebra',
-    notebook: 'Negative Numbers',
-    practiceLabel: 'Do 4 problems daily',
-    currentAccuracy: 60,
-    targetAccuracy: 85,
-    solvedProblems: 24,
-    totalProblems: 40,
-    weeks: 2,
-    resumeAssignmentId: 'assignment-negative-numbers-1',
-    resumeProblemIndex: 25,
-  },
-];
-
-const DUMMY_PERFORMANCE_SNAPSHOT: PerformanceSnapshot = {
-  problemsSolved: 63,
-  mistakes: 21,
-  totalQuestions: 94,
-  timeSpentMinutes: 540,
-  quizzesAttempted: 7,
-};
-
-// These dummy records mirror the planned backend contracts:
-// GET /api/assignments/:id/problems/progress
-// GET /api/assignments/:id/errors/summary?groupBy=topic
-// GET /api/notebooks/quiz-sessions
-const DUMMY_PROBLEM_PROGRESS: Record<string, ProblemProgressRecord[]> = {
-  'assignment-fractions-1': Array.from({ length: 40 }, (_, index) => ({
-    assignmentId: 'assignment-fractions-1',
-    problemIndex: index + 1,
-    attempted: index < 24,
-    solved: index < 18,
-    mistakeCount: index < 18 ? (index % 3 === 0 ? 1 : 0) : 0,
-    totalTimeSeconds: index < 24 ? 420 + index * 18 : 0,
-  })),
-  'assignment-word-problems-1': Array.from({ length: 39 }, (_, index) => ({
-    assignmentId: 'assignment-word-problems-1',
-    problemIndex: index + 1,
-    attempted: index < 27,
-    solved: index < 21,
-    mistakeCount: index < 21 ? (index % 2 === 0 ? 1 : 0) : 0,
-    totalTimeSeconds: index < 27 ? 480 + index * 15 : 0,
-  })),
-  'assignment-negative-numbers-1': Array.from({ length: 40 }, (_, index) => ({
-    assignmentId: 'assignment-negative-numbers-1',
-    problemIndex: index + 1,
-    attempted: index < 30,
-    solved: index < 24,
-    mistakeCount: index < 24 ? (index % 4 === 0 ? 1 : 0) : 0,
-    totalTimeSeconds: index < 30 ? 390 + index * 14 : 0,
-  })),
-};
-
-const DUMMY_ERROR_SUMMARY_BY_TOPIC: Record<string, ProblemErrorSummaryRecord[]> = {
-  'assignment-fractions-1': [
-    { assignmentId: 'assignment-fractions-1', groupBy: 'topic', label: 'Fractions', count: 12 },
-    { assignmentId: 'assignment-fractions-1', groupBy: 'topic', label: 'Equivalent Fractions', count: 5 },
-  ],
-  'assignment-word-problems-1': [
-    { assignmentId: 'assignment-word-problems-1', groupBy: 'topic', label: 'Word Problems', count: 9 },
-    { assignmentId: 'assignment-word-problems-1', groupBy: 'topic', label: 'Units', count: 4 },
-  ],
-  'assignment-negative-numbers-1': [
-    { assignmentId: 'assignment-negative-numbers-1', groupBy: 'topic', label: 'Negative Numbers', count: 7 },
-    { assignmentId: 'assignment-negative-numbers-1', groupBy: 'topic', label: 'Sign Errors', count: 6 },
-  ],
-};
-
-const DUMMY_NOTEBOOK_QUIZ_SESSIONS: NotebookQuizSessionRecord[] = [
-  {
-    subjectId: 'subject-algebra',
-    subjectName: 'Fractions',
-    attempted: true,
-    solved: true,
-    totalQuestions: 8,
-    correctCount: 5,
-    mistakeCount: 3,
-    totalTimeSeconds: 720,
-  },
-  {
-    subjectId: 'subject-general',
-    subjectName: 'Word Problems',
-    attempted: true,
-    solved: false,
-    totalQuestions: 6,
-    correctCount: 4,
-    mistakeCount: 2,
-    totalTimeSeconds: 540,
-  },
-  {
-    subjectId: 'subject-algebra',
-    subjectName: 'Negative Numbers',
-    attempted: true,
-    solved: true,
-    totalQuestions: 5,
-    correctCount: 4,
-    mistakeCount: 1,
-    totalTimeSeconds: 420,
-  },
-];
-
-const buildDummyPlanFromContracts = (plan: NotebookProgressPlan) => {
-  const progressRows = DUMMY_PROBLEM_PROGRESS[plan.resumeAssignmentId] || [];
-  const topicRows = DUMMY_ERROR_SUMMARY_BY_TOPIC[plan.resumeAssignmentId] || [];
-  const quizSession = DUMMY_NOTEBOOK_QUIZ_SESSIONS.find((entry) => entry.subjectId === plan.subjectId);
-
-  const attemptedCount = progressRows.filter((row) => row.attempted).length;
-  const solvedCount = progressRows.filter((row) => row.solved).length;
-  const mistakeCount = progressRows.reduce((sum, row) => sum + row.mistakeCount, 0);
-  const totalTimeSeconds = progressRows.reduce((sum, row) => sum + row.totalTimeSeconds, 0);
-  const topTopic = [...topicRows].sort((left, right) => right.count - left.count)[0]?.label || plan.notebook;
-  const quizAccuracy =
-    quizSession && quizSession.totalQuestions > 0
-      ? (quizSession.correctCount / quizSession.totalQuestions) * 100
-      : plan.currentAccuracy;
-  const currentAccuracy =
-    attemptedCount > 0 ? Math.round(((solvedCount - mistakeCount * 0.35) / attemptedCount) * 100) : 0;
-
-  return {
-    ...plan,
-    totalProblems: progressRows.length || plan.totalProblems,
-    solvedProblems: solvedCount || plan.solvedProblems,
-    currentAccuracy: Math.max(0, Math.min(100, Math.round((currentAccuracy * 0.75) + (quizAccuracy * 0.25)))),
-    practiceLabel: `Focus on ${topTopic}`,
-    totalTimeSeconds,
-    totalMistakes: mistakeCount,
-    quizzesAttempted: quizSession?.attempted ? 1 : 0,
-  };
-};
-
 const parseMistakesFromAssignment = (assignment: AssignmentRecord, notebook: string): ProblemMistake[] => {
   const problemCount = Number(assignment.problemCount) || 0;
   const mistakes: ProblemMistake[] = [];
@@ -392,6 +196,39 @@ const parseMistakesFromAssignment = (assignment: AssignmentRecord, notebook: str
   return mistakes;
 };
 
+const parseHintsFromAssignment = (assignment: AssignmentRecord, notebook: string): ProblemHint[] => {
+  const problemCount = Number(assignment.problemCount) || 0;
+  const hints: ProblemHint[] = [];
+
+  for (let problemIndex = 1; problemIndex <= problemCount; problemIndex += 1) {
+    const candidates = [
+      pickProblemBucket(assignment.hintsByProblem, problemIndex),
+      pickProblemBucket(assignment.feedbackByProblem, problemIndex),
+      pickProblemBucket(assignment.aiFeedbackByProblem, problemIndex),
+      pickProblemBucket(assignment.insightsByProblem, problemIndex),
+      assignment.feedback,
+      assignment.insights,
+    ];
+
+    candidates
+      .flatMap((candidate) => extractEntries(candidate))
+      .filter((entry) => String(entry.kind || '').toLowerCase().includes('hint') && !WRONG_STEP_MATCHER.test(entry.content))
+      .forEach((entry) => {
+        const rawText = String(entry.content || '').trim();
+        if (!rawText) return;
+        hints.push({
+          notebook,
+          assignmentTitle: assignment.title,
+          problemIndex,
+          rawText,
+          normalizedText: normalizeMistakeText(rawText),
+        });
+      });
+  }
+
+  return hints;
+};
+
 export function WeakAreasPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('Loading learning diagnostics...');
@@ -422,16 +259,19 @@ export function WeakAreasPage() {
         );
 
         const mistakes = assignments.flatMap((assignment) => parseMistakesFromAssignment(assignment, subject.name));
+        const hints = assignments.flatMap((assignment) => parseHintsFromAssignment(assignment, subject.name));
 
         return {
           notebook: subject.name,
-          score: totalQuestions > 0 ? Math.min(1, mistakes.length / totalQuestions) : 0,
+          score: totalQuestions > 0 ? Math.min(1, (mistakes.length + hints.length * 0.5) / totalQuestions) : 0,
           totalQuestions,
           mistakes,
+          hints,
         };
       });
 
       const heatmap = notebookStats
+        .filter(({ mistakes, hints }) => mistakes.length > 0 || hints.length > 0)
         .map(({ notebook, score }) => ({ notebook, score: Number(score.toFixed(2)) }))
         .sort((left, right) => right.score - left.score);
 
@@ -457,7 +297,7 @@ export function WeakAreasPage() {
         .slice(0, 3);
 
       const notebooks = notebookStats
-        .map(({ notebook, mistakes }) => {
+        .map(({ notebook, mistakes, hints }) => {
           const grouped = mistakes.reduce<Record<string, { title: string; errors: string[] }>>((accumulator, mistake) => {
             const cluster = groupMistake(mistake.rawText);
             if (!accumulator[cluster.key]) {
@@ -470,14 +310,27 @@ export function WeakAreasPage() {
             return accumulator;
           }, {});
 
+          const hintTexts = [...new Set(hints.map((hint) => hint.rawText))].slice(0, 3);
           const groups = Object.entries(grouped)
             .map(([key, group]) => ({
               id: `${notebook}-${key}`,
               title: group.title,
               errors: group.errors.slice(0, 4),
-              fix: buildFixExplanation(group.title, group.errors),
+              fix:
+                hintTexts.length > 0
+                  ? hintTexts.join(' ')
+                  : buildFixExplanation(group.title, group.errors),
             }))
             .filter((group) => group.errors.length > 0);
+
+          if (groups.length === 0 && hintTexts.length > 0) {
+            groups.push({
+              id: `${notebook}-hint-guidance`,
+              title: 'Hint-Based Guidance',
+              errors: hintTexts,
+              fix: 'These hints came from your notebook practice. Solve a few more whiteboard problems to surface stronger weak-area patterns.',
+            });
+          }
 
           return { notebook, groups };
         })
@@ -487,9 +340,9 @@ export function WeakAreasPage() {
       setWeakTopics(topWeakTopics);
       setInsightGroups(notebooks);
       setStatus(
-        heatmap.length > 0
-          ? `Mapped weak areas across ${heatmap.length} notebooks.`
-          : 'No notebook performance data is available yet.',
+        heatmap.length > 0 || notebooks.length > 0
+          ? `Built from ${notebooks.length || heatmap.length} notebooks using recorded errors and generated hints.`
+          : 'Not enough notebook hint or error data yet. Solve a few more whiteboard problems to see weak areas here.',
       );
     } catch {
       setHeatmapData([]);
@@ -506,59 +359,6 @@ export function WeakAreasPage() {
   }, [loadWeakAreas]);
 
   const notebookCount = useMemo(() => heatmapData.length, [heatmapData]);
-  const improvementPlans = useMemo(
-    () => DUMMY_PROGRESS_DATA.map(buildDummyPlanFromContracts),
-    [],
-  );
-
-  const overviewMetrics = useMemo(() => {
-    const derivedProblemsSolved = improvementPlans.reduce((sum, plan) => sum + plan.solvedProblems, 0);
-    const derivedMistakes = improvementPlans.reduce(
-      (sum, plan) => sum + ('totalMistakes' in plan ? Number(plan.totalMistakes) : 0),
-      0,
-    );
-    const derivedTotalQuestions = improvementPlans.reduce((sum, plan) => sum + plan.totalProblems, 0);
-    const derivedTimeSpentMinutes = Math.round(
-      improvementPlans.reduce(
-        (sum, plan) => sum + ('totalTimeSeconds' in plan ? Number(plan.totalTimeSeconds) : 0),
-        0,
-      ) / 60,
-    );
-    const derivedQuizzesAttempted = improvementPlans.reduce(
-      (sum, plan) => sum + ('quizzesAttempted' in plan ? Number(plan.quizzesAttempted) : 0),
-      0,
-    );
-    const {
-      problemsSolved = derivedProblemsSolved,
-      mistakes = derivedMistakes,
-      totalQuestions = derivedTotalQuestions,
-      timeSpentMinutes = derivedTimeSpentMinutes,
-      quizzesAttempted = derivedQuizzesAttempted,
-    } = DUMMY_PERFORMANCE_SNAPSHOT;
-    const overallAccuracy =
-      totalQuestions > 0 ? Math.round(((totalQuestions - mistakes) / totalQuestions) * 100) : 0;
-    const topicsNeedingFocus = improvementPlans.filter(
-      (plan) => plan.currentAccuracy < plan.targetAccuracy,
-    ).length;
-    const improvementThisWeek = Math.round(
-      (problemsSolved * 0.35) +
-        (quizzesAttempted * 1.5) +
-        Math.max(0, 18 - mistakes) +
-        Math.min(10, timeSpentMinutes / 90),
-    );
-
-    return {
-      overallAccuracy,
-      topicsNeedingFocus,
-      improvementThisWeek,
-    };
-  }, [improvementPlans]);
-
-  const handleResumePractice = useCallback((plan: NotebookProgressPlan) => {
-    window.alert(
-      `Temporary redirect placeholder:\nResume ${plan.notebook} at assignment "${plan.resumeAssignmentId}", problem ${plan.resumeProblemIndex}. This will later use problem_progress to route to the exact whiteboard checkpoint.`,
-    );
-  }, []);
 
   return (
     <div className="app-content">
@@ -619,89 +419,6 @@ export function WeakAreasPage() {
           </div>
 
           <InsightsAccordion notebooks={insightGroups} />
-        </section>
-
-        <section className="weak-panel improvement-plan-panel">
-          <div className="weak-panel-heading">
-            <div>
-              <h2>
-                <Target size={18} />
-                Personalized Improvement Plan
-              </h2>
-              <p>Notebook-level practice recommendations based on solved progress and accuracy trends</p>
-            </div>
-          </div>
-
-          <div className="improvement-plan-list">
-            {improvementPlans.map((plan) => {
-              const progressRatio = plan.totalProblems > 0 ? (plan.solvedProblems / plan.totalProblems) * 100 : 0;
-
-              return (
-                <article key={plan.notebook} className="improvement-plan-card">
-                  <div className="improvement-plan-top">
-                    <div>
-                      <h3>{plan.notebook}</h3>
-                      <p>{plan.practiceLabel}</p>
-                    </div>
-                    <span className="improvement-plan-chip">{plan.weeks} weeks</span>
-                  </div>
-
-                  <div className="improvement-plan-progress-copy">
-                    <span>
-                      Solved {plan.solvedProblems} of {plan.totalProblems} problems
-                    </span>
-                    <span>Current: {plan.currentAccuracy}%</span>
-                  </div>
-
-                  <div className="improvement-plan-track">
-                    <div
-                      className="improvement-plan-fill"
-                      style={{ width: `${Math.min(100, progressRatio)}%` }}
-                    />
-                    <div
-                      className="improvement-plan-target"
-                      style={{ left: `${plan.targetAccuracy}%` }}
-                    />
-                  </div>
-
-                  <div className="improvement-plan-scale">
-                    <span>Weak</span>
-                    <span>Target: {plan.targetAccuracy}%</span>
-                    <span>Strong</span>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="improvement-plan-button"
-                    onClick={() => handleResumePractice(plan)}
-                  >
-                    <CheckCircle2 size={16} />
-                    Start Practice Plan
-                  </button>
-                </article>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="weak-metric-grid">
-          <article className="weak-metric-card">
-            <strong>{overviewMetrics.overallAccuracy}%</strong>
-            <span>Overall Accuracy</span>
-            <label>Needs Improvement</label>
-          </article>
-
-          <article className="weak-metric-card">
-            <strong>{overviewMetrics.topicsNeedingFocus}</strong>
-            <span>Topics Needing Focus</span>
-            <label>Action Required</label>
-          </article>
-
-          <article className="weak-metric-card weak-metric-card-positive">
-            <strong>+{overviewMetrics.improvementThisWeek}%</strong>
-            <span>Overall Improvement</span>
-            <label>Good Progress</label>
-          </article>
         </section>
       </section>
     </div>

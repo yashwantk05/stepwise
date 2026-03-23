@@ -7,7 +7,7 @@ const canUseDevBypass = () => {
   return bypassFlag === "true" || bypassFlag === "1" || bypassFlag === "yes";
 };
 
-const buildDevHeaders = () => {
+const buildDevHeaders = (): Record<string, string> => {
   if (!canUseDevBypass()) return {};
 
   return {
@@ -57,7 +57,9 @@ export async function sendSocraticChat(
   history: { role: string; text: string }[],
   options?: {
     subjectId?: string;
+    classLevel?: number;
     context?: { topic?: string; concept?: string; errorType?: string };
+    audioBase64?: string;
   }
 ) {
   const response = await fetch(`${API_BASE}/socratic/chat`, {
@@ -80,4 +82,18 @@ export async function sendSocraticChat(
   }
 
   return payload as { reply: string; usedNotes: boolean };
+}
+
+export async function getSpeechToken(): Promise<{ token: string; region: string }> {
+  const response = await fetch(`${API_BASE}/speech/token`, {
+    method: "GET",
+    credentials: "include",
+    headers: { ...buildDevHeaders() },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.message || "Speech token unavailable."));
+  }
+  return payload;
 }

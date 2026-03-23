@@ -2,6 +2,7 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const SUBJECTS_KEY = "stepwise_subjects_v1";
 const ASSIGNMENT_SUBJECT_MAP_KEY = "stepwise_assignment_subject_map_v1";
 const LEARNING_ACTIVITY_KEY = "stepwise_learning_activity_v1";
+const USER_SETTINGS_KEY_PREFIX = "stepwise_user_settings_v1";
 const DEFAULT_SUBJECT_NAME = "General";
 
 type AnyRecord = Record<string, unknown>;
@@ -12,6 +13,10 @@ interface User {
   email: string;
   provider?: string;
   avatarUrl?: string;
+}
+
+export interface UserSettings {
+  classLevel: number | null;
 }
 
 interface Subject {
@@ -252,6 +257,38 @@ const withSubjectOnAssignment = (assignment: Assignment): Assignment => {
   const subjectId = map[assignment.id];
   if (!subjectId) return assignment;
   return { ...assignment, subjectId };
+};
+
+const parseClassLevel = (value: unknown): number | null => {
+  const numeric = Number(value);
+  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 12) {
+    return numeric;
+  }
+  return null;
+};
+
+const getUserSettingsStorageKey = (userId?: string) =>
+  `${USER_SETTINGS_KEY_PREFIX}:${String(userId || cachedUser?.id || "anonymous")}`;
+
+export const getUserSettings = (userId?: string): UserSettings => {
+  const key = getUserSettingsStorageKey(userId);
+  const stored = readJson<Partial<UserSettings>>(key, {});
+  return {
+    classLevel: parseClassLevel(stored.classLevel),
+  };
+};
+
+export const updateUserSettings = (
+  updates: Partial<UserSettings>,
+  userId?: string,
+): UserSettings => {
+  const current = getUserSettings(userId);
+  const next: UserSettings = {
+    classLevel:
+      updates.classLevel === undefined ? current.classLevel : parseClassLevel(updates.classLevel),
+  };
+  writeJson(getUserSettingsStorageKey(userId), next);
+  return next;
 };
 
 export const getCurrentUser = async (): Promise<User | null> => {

@@ -21,6 +21,7 @@ import { StudyToolPage } from './pages/StudyToolPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
 import { ProblemBoardPage } from './pages/ProblemBoardPage';
+import { SettingsPage } from './pages/SettingsPage';
 import type { StudyToolType } from './services/studyTools';
 
 type Route =
@@ -29,6 +30,7 @@ type Route =
   | { type: 'notes' }
   | { type: 'weak-areas' }
   | { type: 'progress-analytics' }
+  | { type: 'settings' }
   | { type: 'socratic-tutor'; context?: Record<string, unknown> }
   | { type: 'study-tool'; tool: StudyToolType; subjectId?: string }
   | { type: 'subject'; subjectId: string }
@@ -110,6 +112,8 @@ function App() {
       setRoute({ type: 'weak-areas' });
     } else if (page === 'progress-analytics') {
       setRoute({ type: 'progress-analytics' });
+    } else if (page === 'settings') {
+      setRoute({ type: 'settings' });
     } else if (page === 'socratic-tutor') {
       setRoute({ type: 'socratic-tutor' });
     } else if (page === 'flashcards') {
@@ -178,6 +182,7 @@ function App() {
     if (route.type === 'notes') return 'notes';
     if (route.type === 'weak-areas') return 'weak-areas';
     if (route.type === 'progress-analytics') return 'progress-analytics';
+    if (route.type === 'settings') return 'dashboard';
     if (route.type === 'socratic-tutor') return 'socratic-tutor';
     if (route.type === 'study-tool') return route.tool;
     return 'whiteboard';
@@ -197,6 +202,7 @@ function App() {
           user={user}
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
+          onOpenSettings={() => setRoute({ type: 'settings' })}
           streakCount={streakCount}
           notificationCount={notificationCount}
         />
@@ -220,6 +226,8 @@ function App() {
         {route.type === 'weak-areas' && <WeakAreasPage />}
 
         {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
+
+        {route.type === 'settings' && <SettingsPage user={user} />}
 
         {route.type === 'socratic-tutor' && (
           <div className="socratic-page-shell">

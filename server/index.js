@@ -1969,13 +1969,18 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const history = Array.isArray(request.body?.history) ? request.body.history : [];
   const subjectId = request.body?.subjectId || null;
   const context = request.body?.context || {}; // { topic, concept, errorType }
+  const audioBase64 = String(request.body?.audioBase64 || "").trim();
+  const rawClassLevel = Number(request.body?.classLevel);
+  const classLevel =
+    Number.isInteger(rawClassLevel) && rawClassLevel >= 1 && rawClassLevel <= 12 ? rawClassLevel : null;
 
-  if (!message) {
-    return response.status(400).json({ message: "Message is required." });
+  if (!message && !audioBase64) {
+    return response.status(400).json({ message: "Message or audio is required." });
   }
 
   try {
-    const searchResults = await searchNotes(request.user.id, message, subjectId, 5);
+    const searchQuery = message || "student question";
+    const searchResults = await searchNotes(request.user.id, searchQuery, subjectId, 5);
     
     let noteContext = "";
     if (searchResults && searchResults.length > 0) {
@@ -1985,15 +1990,35 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
 
     const systemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.
 Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
+Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
 If there is relevant notes context provided below, use it to provide personalized hints or references, but still don't give away the direct answer.
+If the student sends audio, transcribe their speech internally and respond to the content of what they said.
 Current learning context: Topic: ${context.topic || "unknown"}, Concept: ${context.concept || "unknown"}, recent error: ${context.errorType || "none"}.
 
 ${noteContext}`;
 
+    // Build user content — multimodal when audio is present
+    let userContent;
+    if (audioBase64) {
+      userContent = [];
+      if (message) {
+        userContent.push({ type: "text", text: message });
+      }
+      userContent.push({
+        type: "input_audio",
+        input_audio: {
+          data: audioBase64,
+          format: "webm",
+        },
+      });
+    } else {
+      userContent = message;
+    }
+
     const promptMessages = [
       { role: "system", content: systemPrompt },
       ...history.map((msg) => ({ role: msg.role === "user" ? "user" : "assistant", content: msg.text })),
-      { role: "user", content: message }
+      { role: "user", content: userContent }
     ];
 
     const replyText = await requestAzureChatCompletion({ 
@@ -2006,6 +2031,33 @@ ${noteContext}`;
   } catch (error) {
     console.error("Socratic chat failed:", error.message);
     response.status(500).json({ message: "Unable to process Socratic chat request." });
+  }
+});
+
+// Azure Speech Token endpoint
+app.get("/api/speech/token", requireAuth, async (request, response) => {
+  const speechKey = globalThis.process?.env?.AZURE_SPEECH_KEY || "";
+  const speechRegion = globalThis.process?.env?.AZURE_SPEECH_REGION || "eastus";
+
+  if (!speechKey) {
+    return response.status(500).json({ message: "AZURE_SPEECH_KEY is not configured on the server." });
+  }
+
+  try {
+    const res = await fetch(`https://${speechRegion}.api.cognitive.microsoft.com/sts/v1.0/issueToken`, {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": speechKey,
+        "Content-type": "application/x-www-form-urlencoded"
+      }
+    });
+    
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const token = await res.text();
+    response.json({ token, region: speechRegion });
+  } catch (err) {
+    console.error("Failed to fetch Speech token:", err.message);
+    response.status(500).json({ message: "Speech integration unavailable." });
   }
 });
 

@@ -198,8 +198,13 @@ body {
 
 .nav-label {
   text-align: left;
-  margin-left: 4px;
+  margin-left: 10px;
   white-space: nowrap;
+}
+
+.app-sidebar.open .nav-item {
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .app-sidebar.collapsed .sidebar-title {
@@ -3732,4 +3737,54 @@ textarea {
   .socratic-chat-col {
     padding: 0 10px;
   }
+}
+
+.settings-page {
+  flex: 1;
+  padding: 24px;
+}
+
+.settings-card {
+  max-width: 560px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  display: grid;
+  gap: 10px;
+}
+
+.settings-card h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.settings-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.settings-field-label {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.settings-select {
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 0 12px;
+  font-size: 14px;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px rgb(139 92 246 / 0.2);
 }

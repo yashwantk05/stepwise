@@ -1,10 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Flame } from 'lucide-react';
+import { Flame, Settings } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
   onSignOut: () => void;
   onDeleteAccount: () => void;
+  onOpenSettings: () => void;
   streakCount: number;
   notificationCount: number;
 }
@@ -13,6 +14,7 @@ export function Topbar({
   user,
   onSignOut,
   onDeleteAccount,
+  onOpenSettings,
   streakCount,
   notificationCount,
 }: TopbarProps) {
@@ -45,6 +47,11 @@ export function Topbar({
       .join('')
       .toUpperCase()
       .slice(0, 2);
+  };
+
+  const handleOpenSettings = () => {
+    setShowAccountMenu(false);
+    onOpenSettings();
   };
 
   return (
@@ -104,6 +111,11 @@ export function Topbar({
                 <div style={{ fontWeight: 600, fontSize: '14px' }}>{user.name}</div>
                 <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>{user.email}</div>
               </div>
+
+              <button onClick={handleOpenSettings}>
+                <Settings size={16} />
+                Settings
+              </button>
               
               <button onClick={onSignOut}>
                 <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">

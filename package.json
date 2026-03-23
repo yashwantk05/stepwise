@@ -56,6 +56,8 @@
     "input-otp": "1.4.2",
     "katex": "^0.16.40",
     "lucide-react": "0.487.0",
+    "mathlive": "^0.109.0",
+    "microsoft-cognitiveservices-speech-sdk": "^1.48.0",
     "motion": "12.23.24",
     "multer": "^2.1.1",
     "next-themes": "0.4.6",

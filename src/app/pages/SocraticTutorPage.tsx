@@ -1,12 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { SendHorizontal } from 'lucide-react';
-import { ContextBar, TutorContextState } from '../components/ContextBar';
-import { DiagramRenderer } from '../components/DiagramRenderer';
-import { InputModesPanel } from '../components/InputModesPanel';
-import { ResponseOptionsPanel } from '../components/ResponseOptionsPanel';
+// REMOVE lines 1–8, REPLACE WITH:
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { SendHorizontal, Mic, Image, Calculator, ChevronUp } from 'lucide-react';
+import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
-import { StepAnimator } from '../components/StepAnimator';
 import { getErrorSummary, getProblemErrors, listSubjects } from '../services/storage';
+import { sendSocraticChat } from '../services/studyTools';
 
 interface SubjectRecord {
   id: string;
@@ -45,31 +43,6 @@ const extractTopicFromText = (text: string, notebookOptions: string[]) => {
   return '';
 };
 
-const buildSocraticReply = (
-  userText: string,
-  context: TutorContextState,
-  weakTopic: string,
-  recentErrorType: string,
-) => {
-  const topic = context.topic || weakTopic || 'this topic';
-  const concept = context.concept || 'the current step';
-  const errorType = context.errorType || recentErrorType;
-  const lowered = userText.toLowerCase();
-
-  if (errorType) {
-    return `Looks like ${errorType.toLowerCase()} might be involved. Before solving, what changes when you check ${concept.toLowerCase()} inside ${topic.toLowerCase()}?`;
-  }
-
-  if (lowered.includes('stuck') || lowered.includes("don't know")) {
-    return `Let’s shrink the problem. What definition or rule do you know first for ${topic.toLowerCase()}?`;
-  }
-
-  if (lowered.includes('i think') || lowered.includes('maybe')) {
-    return `Nice start. What clue in the problem tells you that idea fits ${topic.toLowerCase()} here?`;
-  }
-
-  return `For ${topic.toLowerCase()}, what does ${concept.toLowerCase()} represent in this step, and which rule should act on it first?`;
-};
 
 export function SocraticTutorPage({
   initialContext,
@@ -96,8 +69,11 @@ export function SocraticTutorPage({
     },
   ]);
   const [draft, setDraft] = useState('');
-  const [activeMode, setActiveMode] = useState<'text' | 'voice' | 'image' | 'equation'>('text');
+  const [activeMode, setActiveMode] = useState<'voice' | 'image' | 'equation' | null>(null);
   const [activeOption, setActiveOption] = useState<'voice' | 'diagram' | 'steps'>('diagram');
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     listSubjects().then((rows) => setSubjects(rows as SubjectRecord[])).catch(() => {});
@@ -133,10 +109,25 @@ export function SocraticTutorPage({
       setContext((current) => ({ ...current, topic: weakTopic, source: 'weak-areas' }));
     }
   }, [context.topic, weakTopic]);
+  
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
-  const handleSend = useCallback(() => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const toggleMode = (mode: 'voice' | 'image' | 'equation') => {
+    setActiveMode((current) => (current === mode ? null : mode));
+  };
+
+  const handleSend = useCallback(async () => {
     const trimmed = draft.trim();
-    if (!trimmed) return;
+    if (!trimmed || isLoading) return;
 
     const autoTopic = context.topic || extractTopicFromText(trimmed, notebookOptions);
     const nextContext = {
@@ -146,105 +137,201 @@ export function SocraticTutorPage({
     };
     setContext(nextContext);
 
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    setDraft('');
     setMessages((current) => [
       ...current,
       {
         id: `user-${Date.now()}`,
         role: 'user',
         text: trimmed,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      },
-      {
-        id: `assistant-${Date.now() + 1}`,
-        role: 'assistant',
-        text: buildSocraticReply(trimmed, nextContext, weakTopic, recentErrorType),
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time,
       },
     ]);
-    setDraft('');
-  }, [context, draft, notebookOptions, recentErrorType, weakTopic]);
+    
+    setIsLoading(true);
 
-  const tutorSteps = useMemo(
-    () => [
-      `Identify the topic: ${context.topic || weakTopic || 'Choose a topic'}`,
-      `Name the concept: ${context.concept || 'Break the problem into one smaller concept'}`,
-      `Watch for the pattern: ${context.errorType || recentErrorType || 'No recent error pattern yet'}`,
-      'Apply one rule to one small part before solving the whole problem.',
-    ],
-    [context.concept, context.errorType, context.topic, recentErrorType, weakTopic],
-  );
+    try {
+      const history = messages.map(m => ({ role: m.role, text: m.text }));
+      const response = await sendSocraticChat(trimmed, history, {
+        context: {
+          topic: nextContext.topic || weakTopic,
+          concept: nextContext.concept,
+          errorType: nextContext.errorType || recentErrorType,
+        }
+      });
+
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now() + 1}`,
+          role: 'assistant',
+          text: response.reply + (response.usedNotes ? '\n\n*(Based on your notes)*' : ''),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } catch (err) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now() + 1}`,
+          role: 'assistant',
+          text: 'Oops, something went wrong. Let me think about that again.',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [context, draft, notebookOptions, recentErrorType, weakTopic, isLoading, messages]);
+
+
 
   return (
-    <div className="app-content">
-      <section className="socratic-page">
-        <header className="progress-header">
-          <div>
-            <h1>Socratic Tutor</h1>
-            <p>Learn by thinking, guided step by step</p>
+    <div className="socratic-page-v2">
+
+      {/* Top bar */}
+      <header className="socratic-topbar">
+        <div className="socratic-topbar-title">
+          <h1>Socratic Tutor</h1>
+          <p>Learn by thinking, guided step by step</p>
+        </div>
+        <button
+          type="button"
+          className={`socratic-panel-toggle ${panelOpen ? 'open' : ''}`}
+          onClick={() => setPanelOpen((v) => !v)}
+        >
+          <span>Context &amp; Options</span>
+          <ChevronUp size={13} className="socratic-chevron" />
+        </button>
+      </header>
+
+      {/* Collapsible context + options panel */}
+      <div className={`socratic-context-panel ${panelOpen ? 'open' : ''}`}>
+        <div className="socratic-context-grid">
+          <div className="socratic-ctx-box">
+            <span className="socratic-ctx-label">Topic</span>
+            <input
+              type="text"
+              value={context.topic}
+              list="socratic-topic-list"
+              onChange={(e) => setContext((c) => ({ ...c, topic: e.target.value, source: 'manual' }))}
+              placeholder="Quadratic Equations"
+            />
+            <datalist id="socratic-topic-list">
+              {notebookOptions.map((o) => <option key={o} value={o} />)}
+            </datalist>
           </div>
-        </header>
 
-        <ContextBar
-          context={context}
-          notebookOptions={notebookOptions}
-          onChange={(updates) => setContext((current) => ({ ...current, ...updates }))}
-        />
+          <div className="socratic-ctx-box">
+            <span className="socratic-ctx-label">Concept</span>
+            <input
+              type="text"
+              value={context.concept}
+              onChange={(e) => setContext((c) => ({ ...c, concept: e.target.value, source: 'manual' }))}
+              placeholder="Factoring"
+            />
+          </div>
 
-        <div className="socratic-layout">
-          <div className="socratic-main">
+          <div className="socratic-ctx-box">
+            <span className="socratic-ctx-label">Focus / Error type</span>
+            <input
+              type="text"
+              value={context.errorType}
+              onChange={(e) => setContext((c) => ({ ...c, errorType: e.target.value, source: 'manual' }))}
+              placeholder="Sign Errors"
+            />
+          </div>
+
+          <div className="socratic-ctx-box">
+            <span className="socratic-ctx-label">Response format</span>
+            <div className="socratic-ctx-pills">
+              {(['diagram', 'steps', 'voice'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  className={`socratic-ctx-pill ${activeOption === opt ? 'active' : ''}`}
+                  onClick={() => setActiveOption(opt)}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="socratic-ctx-box">
+            <span className="socratic-ctx-label">Weak area</span>
+            <span className="socratic-ctx-value">{weakTopic || 'None detected yet'}</span>
+          </div>
+
+          <div className="socratic-ctx-box">
+            <span className="socratic-ctx-label">Source</span>
+            <span className="socratic-ctx-value">{context.source}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Chat column */}
+      <div className="socratic-body">
+        <div className="socratic-chat-col">
+          <div className="socratic-chat-scroll">
             <SocraticChat messages={messages} />
+            <div ref={chatEndRef} />
+          </div>
 
-            <section className="socratic-compose">
+          {/* Pinned input bar */}
+          <div className="socratic-input-wrap">
+            <div className="socratic-input-box">
               <textarea
                 value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder="Ask about a step, paste a problem, or describe where you got stuck..."
-                rows={4}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask about a step, paste a problem, or describe where you got stuck…"
+                rows={1}
+                className="socratic-input-textarea"
               />
-              <button type="button" className="improvement-plan-button" onClick={handleSend}>
-                <SendHorizontal size={16} />
-                Send
-              </button>
-            </section>
-          </div>
-
-          <aside className="socratic-side">
-            <InputModesPanel activeMode={activeMode} onSelect={setActiveMode} />
-            <ResponseOptionsPanel activeOption={activeOption} onSelect={setActiveOption} />
-
-            {activeOption === 'diagram' && (
-              <DiagramRenderer topic={context.topic || weakTopic} concept={context.concept} />
-            )}
-            {activeOption === 'steps' && <StepAnimator steps={tutorSteps} />}
-            {activeOption === 'voice' && (
-              <section className="socratic-visual-card">
-                <h3>Voice Explanation</h3>
-                <p className="subtle">
-                  Keep the explanation short, ask one question at a time, and wait for the learner to respond.
-                </p>
-              </section>
-            )}
-
-            <section className="socratic-visual-card">
-              <h3>Personalization Signals</h3>
-              <div className="socratic-signal-list">
-                <div>
-                  <strong>Weak Areas</strong>
-                  <span>{weakTopic || 'No weak topic detected yet'}</span>
+              <div className="socratic-input-row">
+                <div className="socratic-mode-icons">
+                  <button
+                    type="button"
+                    className={`socratic-mode-icon ${activeMode === 'voice' ? 'active' : ''}`}
+                    onClick={() => toggleMode('voice')}
+                    title="Voice"
+                  >
+                    <Mic size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`socratic-mode-icon ${activeMode === 'image' ? 'active' : ''}`}
+                    onClick={() => toggleMode('image')}
+                    title="Image"
+                  >
+                    <Image size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className={`socratic-mode-icon ${activeMode === 'equation' ? 'active' : ''}`}
+                    onClick={() => toggleMode('equation')}
+                    title="Equation"
+                  >
+                    <Calculator size={15} />
+                  </button>
                 </div>
-                <div>
-                  <strong>Problem Error Pattern</strong>
-                  <span>{recentErrorType || 'No problem-level error loaded'}</span>
-                </div>
-                <div>
-                  <strong>Current Source</strong>
-                  <span>{context.source}</span>
-                </div>
+                <button
+                  type="button"
+                  className="socratic-send-btn"
+                  onClick={handleSend}
+                  disabled={!draft.trim()}
+                >
+                  <SendHorizontal size={15} />
+                </button>
               </div>
-            </section>
-          </aside>
+            </div>
+          </div>
         </div>
-      </section>
+      </div>
+
     </div>
   );
 }

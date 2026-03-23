@@ -305,10 +305,18 @@ export const requestAccountDeletion = async (): Promise<void> => {
 };
 
 export const listSubjects = async (): Promise<Subject[]> => {
-  const subjects = listSubjectsLocal();
-  if (subjects.length > 0) {
-    return subjects;
+  try {
+    const subjects = (await request("/notebooks/subjects")) as Subject[];
+    if (subjects.length > 0) {
+      saveSubjectsLocal(subjects);
+      return subjects;
+    }
+  } catch {
+    // Fall back to localStorage if server is unavailable
   }
+
+  const localSubjects = listSubjectsLocal();
+  if (localSubjects.length > 0) return localSubjects;
 
   const defaultSubject: Subject = {
     id: `subject-${Date.now()}`,
@@ -327,19 +335,38 @@ export const getSubjectById = async (id: string): Promise<Subject> => {
 };
 
 export const createSubject = async (name: string): Promise<Subject> => {
-  const subjects = listSubjectsLocal();
-  const newSubject: Subject = {
-    id: `subject-${Date.now()}`,
-    name,
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-  subjects.unshift(newSubject);
-  saveSubjectsLocal(subjects);
-  return newSubject;
+  try {
+    const created = (await request("/notebooks/subjects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    })) as Subject;
+    const subjects = listSubjectsLocal();
+    subjects.unshift(created);
+    saveSubjectsLocal(subjects);
+    return created;
+  } catch {
+    // Fallback to localStorage
+    const subjects = listSubjectsLocal();
+    const newSubject: Subject = {
+      id: `subject-${Date.now()}`,
+      name,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    subjects.unshift(newSubject);
+    saveSubjectsLocal(subjects);
+    return newSubject;
+  }
 };
 
 export const deleteSubject = async (id: string): Promise<void> => {
+  try {
+    await request(`/notebooks/subjects/${encodeURIComponent(id)}`, { method: "DELETE" });
+  } catch {
+    // Continue with local cleanup even if server fails
+  }
+
   const subjects = listSubjectsLocal().filter((entry) => entry.id !== id);
   saveSubjectsLocal(subjects);
 
@@ -405,32 +432,47 @@ const saveNotes = (subjectId: string, notes: Note[]) => {
 };
 
 export const listNotes = async (subjectId: string): Promise<Note[]> => {
-  const rawNotes = readJson<Array<Partial<Note> & Record<string, unknown>>>(`notes-${subjectId}`, []);
-  const normalized = rawNotes.map(normalizeNote);
-  saveNotes(subjectId, normalized);
-  return normalized;
+  try {
+    const notes = (await request(`/notebooks/${encodeURIComponent(subjectId)}/notes`)) as Note[];
+    saveNotes(subjectId, notes);
+    return notes;
+  } catch {
+    // Fall back to localStorage
+    const rawNotes = readJson<Array<Partial<Note> & Record<string, unknown>>>(`notes-${subjectId}`, []);
+    const normalized = rawNotes.map(normalizeNote);
+    saveNotes(subjectId, normalized);
+    return normalized;
+  }
 };
 
 export const createTextNote = async (
   subjectId: string,
   input: { title: string; content?: string; tags?: string[] },
 ): Promise<Note> => {
-  const notes = await listNotes(subjectId);
-  const timestamp = Date.now();
-  const newNote: Note = {
-    id: `note-${timestamp}`,
-    title: input.title.trim() || "Untitled Note",
-    content: (input.content || "").trim(),
-    tags: Array.isArray(input.tags)
-      ? input.tags.filter((tag) => tag.trim().length > 0).slice(0, 6)
-      : [],
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
-
-  notes.unshift(newNote);
-  saveNotes(subjectId, notes);
-  return newNote;
+  try {
+    return (await request(`/notebooks/${encodeURIComponent(subjectId)}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: input.title, content: input.content || "", tags: input.tags || [] }),
+    })) as Note;
+  } catch {
+    // Fallback to localStorage
+    const notes = await listNotes(subjectId);
+    const timestamp = Date.now();
+    const newNote: Note = {
+      id: `note-${timestamp}`,
+      title: input.title.trim() || "Untitled Note",
+      content: (input.content || "").trim(),
+      tags: Array.isArray(input.tags)
+        ? input.tags.filter((tag) => tag.trim().length > 0).slice(0, 6)
+        : [],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    notes.unshift(newNote);
+    saveNotes(subjectId, notes);
+    return newNote;
+  }
 };
 
 export const updateTextNote = async (
@@ -438,26 +480,32 @@ export const updateTextNote = async (
   noteId: string,
   updates: { title: string; content: string; tags?: string[] },
 ): Promise<Note> => {
-  const notes = await listNotes(subjectId);
-  const noteIndex = notes.findIndex((entry) => entry.id === noteId);
-  if (noteIndex === -1) {
-    throw new Error("Note not found");
+  try {
+    const updated = (await request(`/notebooks/${encodeURIComponent(subjectId)}/notes/${encodeURIComponent(noteId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: updates.title, content: updates.content, tags: updates.tags }),
+    })) as Note;
+    return updated;
+  } catch {
+    // Fallback to localStorage
+    const notes = await listNotes(subjectId);
+    const noteIndex = notes.findIndex((entry) => entry.id === noteId);
+    if (noteIndex === -1) throw new Error("Note not found");
+    const current = notes[noteIndex];
+    const updatedNote: Note = {
+      ...current,
+      title: updates.title.trim() || current.title,
+      content: updates.content,
+      tags: Array.isArray(updates.tags)
+        ? updates.tags.filter((tag) => tag.trim().length > 0).slice(0, 6)
+        : current.tags,
+      updatedAt: Date.now(),
+    };
+    notes[noteIndex] = updatedNote;
+    saveNotes(subjectId, notes);
+    return updatedNote;
   }
-
-  const current = notes[noteIndex];
-  const updatedNote: Note = {
-    ...current,
-    title: updates.title.trim() || current.title,
-    content: updates.content,
-    tags: Array.isArray(updates.tags)
-      ? updates.tags.filter((tag) => tag.trim().length > 0).slice(0, 6)
-      : current.tags,
-    updatedAt: Date.now(),
-  };
-
-  notes[noteIndex] = updatedNote;
-  saveNotes(subjectId, notes);
-  return updatedNote;
 };
 
 export const uploadNote = async (subjectId: string, file: File): Promise<Note> => {
@@ -498,6 +546,11 @@ export const downloadNoteBlob = async (subjectId: string, noteId: string): Promi
 };
 
 export const deleteNote = async (subjectId: string, noteId: string): Promise<void> => {
+  try {
+    await request(`/notebooks/${encodeURIComponent(subjectId)}/notes/${encodeURIComponent(noteId)}`, { method: "DELETE" });
+  } catch {
+    // Continue with local cleanup
+  }
   const notes = await listNotes(subjectId);
   const filtered = notes.filter((entry) => entry.id !== noteId);
   saveNotes(subjectId, filtered);

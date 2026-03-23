@@ -87,7 +87,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
   const [uploadMessage, setUploadMessage] = useState('');
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
-  const audioInputRef = useRef<HTMLInputElement>(null);
+
 
   const loadSubjects = useCallback(async () => {
     const data = (await listSubjects()) as SubjectRecord[];
@@ -341,26 +341,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
     }
   };
 
-  const handleAudioUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file || !selectedSubjectId) return;
 
-    setLoading(true);
-    setUploadMessage('');
-    try {
-      await handleImportedNote(
-        fileNameToTitle(file.name),
-        `Voice note uploaded: ${file.name}\n\nTranscription is not available yet, but you can add or edit the note text here manually.`,
-        ['Voice Note', 'Uploaded'],
-      );
-      setUploadMessage('Voice note added. You can now edit its text manually.');
-    } catch (error) {
-      setUploadMessage(error instanceof Error ? error.message : 'Unable to import this voice note.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleOpenTool = async (tool: StudyToolType) => {
     if (!selectedSubjectId) return;
@@ -538,13 +519,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
                   className="notes-hidden-input"
                   onChange={handlePdfUpload}
                 />
-                <input
-                  ref={audioInputRef}
-                  type="file"
-                  accept="audio/*"
-                  className="notes-hidden-input"
-                  onChange={handleAudioUpload}
-                />
+
                 <button
                   type="button"
                   className="notes-upload-btn"
@@ -565,12 +540,13 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
                 </button>
                 <button
                   type="button"
-                  className="notes-upload-btn"
-                  onClick={() => audioInputRef.current?.click()}
-                  disabled={loading || !selectedSubjectId}
+                  className="notes-upload-btn notes-upload-btn-upcoming"
+                  disabled
+                  title="Voice note upload is coming soon"
                 >
                   <Mic size={16} />
                   Voice notes
+                  <span className="notes-upcoming-badge">Upcoming</span>
                 </button>
                 {uploadMessage ? <p className="notes-upload-message">{uploadMessage}</p> : null}
               </div>

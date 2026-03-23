@@ -5,7 +5,7 @@ import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@excalidraw/excalidraw/index.css";
-import { analyzeDrawing } from "../services/ai";
+import { analyzeDrawing, isDebugImagesEnabled } from "../services/ai";
 import {
   getAssignmentById,
   getProblemContext,
@@ -278,6 +278,9 @@ const getPersistedScene = (scene: any) => {
   };
 };
 
+const getRenderableElements = (elements: any[]) =>
+  (Array.isArray(elements) ? elements : []).filter((element) => !element?.isDeleted);
+
 const formatDate = (time: number) => new Date(time).toLocaleString();
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -442,6 +445,12 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const [isBoardSelecting, setIsBoardSelecting] = useState(false);
   const [isAiSelecting, setIsAiSelecting] = useState(false);
   const [isStylePanelOpen, setIsStylePanelOpen] = useState(true);
+  const [debugHintImage, setDebugHintImage] = useState<{
+    url: string;
+    width: number;
+    height: number;
+    bytes: number;
+  } | null>(null);
   const analyzeTimerRef = useRef<any>(null);
   const lastSnapshotRef = useRef<string | null>(null);
   const pdfDocumentRef = useRef<any>(null);
@@ -467,6 +476,15 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     URL.revokeObjectURL(pageImageUrlRef.current);
     pageImageUrlRef.current = "";
     setPageImageUrl("");
+  }, []);
+
+  const clearDebugHintImage = useCallback(() => {
+    setDebugHintImage((current) => {
+      if (current?.url) {
+        URL.revokeObjectURL(current.url);
+      }
+      return null;
+    });
   }, []);
 
   const loadProblemImage = useCallback(async () => {
@@ -601,13 +619,14 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
   const analyzeSceneForHint = useCallback(
     async (elements: any, appState: any, files: any) => {
-      if (elements.length === 0) {
+      const renderableElements = getRenderableElements(elements);
+      if (renderableElements.length === 0) {
         setHint("Start drawing to receive hints.");
         return;
       }
 
       const canvas = await exportToCanvas({
-        elements,
+        elements: renderableElements,
         appState,
         files,
         exportScale: WHITEBOARD_EXPORT_SCALE,
@@ -617,6 +636,21 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
       const blob = await new Promise<Blob | null>((resolve) => exportCanvas.toBlob(resolve, "image/png"));
       if (!blob) return;
+
+      if (isDebugImagesEnabled()) {
+        const debugUrl = URL.createObjectURL(blob);
+        setDebugHintImage((current) => {
+          if (current?.url) {
+            URL.revokeObjectURL(current.url);
+          }
+          return {
+            url: debugUrl,
+            width: exportCanvas.width,
+            height: exportCanvas.height,
+            bytes: blob.size,
+          };
+        });
+      }
 
       const base64 = await blobToBase64(blob);
       if (base64 === lastSnapshotRef.current) return;
@@ -640,17 +674,13 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           previousHintsRef.current = [...previousHintsRef.current, ...newHintTexts].slice(-5);
           hintLevelRef.current = Math.min(4, hintLevelRef.current + 1);
         }
-        if (nextInsights.length > 0) {
-          const hasNewErrors = nextInsights.some((entry: any) => entry.kind === "wrong");
-          setManualInsights((previous) =>
-            mergeLimitedInsights(
-              hasNewErrors
-                ? previous.filter((entry) => entry.kind === "wrong")
-                : previous,
-              nextInsights,
-            ),
-          );
-        }
+        setManualInsights((previous) => {
+          const withoutOldErrors = previous.filter((entry) => entry.kind !== "wrong");
+          if (nextInsights.length === 0) {
+            return withoutOldErrors;
+          }
+          return mergeLimitedInsights(withoutOldErrors, nextInsights);
+        });
 
         setHint("AI feedback updated.");
       } catch {
@@ -684,6 +714,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         URL.revokeObjectURL(pageImageUrlRef.current);
         pageImageUrlRef.current = "";
       }
+      clearDebugHintImage();
       const currentPdf = pdfDocumentRef.current;
       pdfDocumentRef.current = null;
       if (currentPdf?.destroy) {
@@ -875,7 +906,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
   const appendLimitedInsights = useCallback((incomingInsights: any[]) => {
     setManualInsights((previous) => mergeLimitedInsights(previous, incomingInsights));
-  }, []);
+  }, [clearDebugHintImage]);
 
   const startSelectionTool = (mode: string) => {
     setSelectionMode(mode);
@@ -890,7 +921,8 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const runSelectionAnalysis = useCallback(
     async (selectionRect: any, mode: string, bounds: any) => {
       const scene = latestSceneRef.current || getDefaultScene();
-      if (!scene.elements?.length) {
+      const renderableElements = getRenderableElements(scene.elements);
+      if (!renderableElements.length) {
         setHint("Draw something first, then use a selection tool.");
         return;
       }
@@ -898,7 +930,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       setIsAiSelecting(true);
       try {
         const exportedCanvas = await exportToCanvas({
-          elements: scene.elements,
+          elements: renderableElements,
           appState: scene.appState,
           files: scene.files,
           exportScale: WHITEBOARD_EXPORT_SCALE,
@@ -1187,6 +1219,29 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
           <div className="insights-panel">
             <h2>Recommendations</h2>
+
+            {isDebugImagesEnabled() && debugHintImage && (
+              <div className="insight-group">
+                <h3>Debug Export</h3>
+                <details className="insight-item insight-item-explain" open>
+                  <summary>Latest whiteboard PNG sent to AI</summary>
+                  <p className="subtle">
+                    {debugHintImage.width} x {debugHintImage.height} px, {debugHintImage.bytes} bytes
+                  </p>
+                  <img
+                    src={debugHintImage.url}
+                    alt="Latest whiteboard export sent to AI"
+                    style={{
+                      width: "100%",
+                      display: "block",
+                      borderRadius: "10px",
+                      border: "1px solid #dbe4ff",
+                      background: "#fff",
+                    }}
+                  />
+                </details>
+              </div>
+            )}
 
             {wrongInsights.length > 0 && (
               <div className="insight-group">

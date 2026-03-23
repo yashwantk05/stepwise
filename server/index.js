@@ -1480,6 +1480,37 @@ const isDebugRoutesEnabled = () => {
   return flag === "true" || flag === "1" || flag === "yes";
 };
 
+const sanitizeDebugLabel = (value) =>
+  String(value || "debug")
+    .trim()
+    .replace(/[^\w.-]+/g, "-")
+    .slice(0, 48);
+
+const debugImageCache = new Map();
+const MAX_DEBUG_CACHE_ITEMS = 60;
+
+const buildDebugCacheKey = (userId, label) => `${String(userId || "anonymous")}::${label}`;
+
+app.get("/api/debug/echo-image", requireAuth, (request, response) => {
+  if (!isDebugRoutesEnabled()) {
+    response.status(404).json({ message: "Not found." });
+    return;
+  }
+
+  const label = sanitizeDebugLabel(request.query?.label);
+  const cacheKey = buildDebugCacheKey(request.user?.id, label);
+  const cached = debugImageCache.get(cacheKey);
+  if (!cached?.buffer) {
+    response.status(404).json({ message: "No debug image captured yet for this label." });
+    return;
+  }
+
+  response.setHeader("Content-Type", cached.mimeType || "application/octet-stream");
+  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Content-Disposition", `inline; filename="${label}.${cached.extension}"`);
+  response.send(cached.buffer);
+});
+
 app.post("/api/debug/echo-image", requireAuth, upload.single("file"), (request, response) => {
   if (!isDebugRoutesEnabled()) {
     response.status(404).json({ message: "Not found." });
@@ -1492,12 +1523,20 @@ app.post("/api/debug/echo-image", requireAuth, upload.single("file"), (request, 
     return;
   }
 
-  const label = String(request.query?.label || "debug")
-    .trim()
-    .replace(/[^\w.-]+/g, "-")
-    .slice(0, 48);
+  const label = sanitizeDebugLabel(request.query?.label);
   const mimeType = file.mimetype || "application/octet-stream";
   const extension = mimeType === "image/png" ? "png" : mimeType === "image/jpeg" ? "jpg" : "bin";
+  const cacheKey = buildDebugCacheKey(request.user?.id, label);
+  debugImageCache.set(cacheKey, {
+    buffer: Buffer.from(file.buffer),
+    mimeType,
+    extension,
+    createdAt: Date.now(),
+  });
+  if (debugImageCache.size > MAX_DEBUG_CACHE_ITEMS) {
+    const oldestKey = debugImageCache.keys().next().value;
+    if (oldestKey) debugImageCache.delete(oldestKey);
+  }
 
   response.setHeader("Content-Type", mimeType);
   response.setHeader("Cache-Control", "no-store");

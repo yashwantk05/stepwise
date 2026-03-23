@@ -1,7 +1,9 @@
 import express from "express";
 import multer from "multer";
 import { Buffer } from "node:buffer";
-import pdfParse from "pdf-parse";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -608,16 +610,19 @@ const parseJsonObject = (value, fallback) => {
 
 const buildStudyToolPrompt = ({ tool, subject, notesText }) => {
   const commonRules = `
-You are creating study material from a student's notes.
+You are an expert educator creating comprehensive, high-quality study material based on a student's detailed notes.
 
 Subject: ${subject}
 
-Notes:
+Source Notes:
 ${notesText}
 
 Rules:
-- Use only the provided notes.
-- Keep the content accurate and student-friendly.
+- Deeply analyze the provided notes to extract core concepts, detailed facts, formulas, and nuanced ideas.
+- Do not just ask superficial questions about the titles. Drill down into the actual material.
+- If the notes contain detailed explanations, definitions, or step-by-step processes, make sure your study items test a thorough understanding of them.
+- Make the questions challenging but fair, aiming to genuinely test comprehension of the source material.
+- Rely ONLY on the provided notes text.
 - Return valid JSON only.
 - Do not wrap the JSON in markdown fences.
   `.trim();
@@ -1578,7 +1583,7 @@ app.post("/api/notes/study-tools", requireAuth, async (request, response) => {
   const notesText = normalizedNotes
     .map((entry, index) => `Note ${index + 1}: ${entry.title || "Untitled"}\n${entry.content}`)
     .join("\n\n---\n\n")
-    .slice(0, 12000);
+    .slice(0, 50000);
 
   try {
     const output = await generateStudyToolWithAzure({

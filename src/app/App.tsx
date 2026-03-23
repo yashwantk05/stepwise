@@ -39,8 +39,7 @@ function App() {
   const [user, setUser] = useState<any>(null);
   const [authReady, setAuthReady] = useState(false);
   const [route, setRoute] = useState<Route>({ type: 'dashboard' });
-  const [isCompactLayout, setIsCompactLayout] = useState(() => window.innerWidth <= 1024);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(() => window.innerWidth > 1024);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [streakCount, setStreakCount] = useState(0);
   const [notificationCount, setNotificationCount] = useState(0);
 
@@ -58,14 +57,16 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const onResize = () => {
-      const compact = window.innerWidth <= 1024;
-      setIsCompactLayout(compact);
-      setIsSidebarOpen(!compact);
+    const onFullscreenChange = () => {
+      // Keep the sidebar from “sticking around” when the user enters fullscreen.
+      if (document.fullscreenElement) {
+        setIsSidebarExpanded(false);
+      }
     };
 
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () =>
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, []);
 
   useEffect(() => {
@@ -120,11 +121,7 @@ function App() {
     } else if (page === 'revision-sheet') {
       setRoute({ type: 'study-tool', tool: 'revision-sheet' });
     }
-
-    if (isCompactLayout) {
-      setIsSidebarOpen(false);
-    }
-  }, [isCompactLayout]);
+  }, []);
 
   const openSubject = useCallback((subjectId: string) => {
     setRoute({ type: 'subject', subjectId });
@@ -149,6 +146,14 @@ function App() {
   const openStudyTool = useCallback((tool: StudyToolType, subjectId?: string) => {
     setRoute({ type: 'study-tool', tool, subjectId });
   }, []);
+
+  const handleDashboardMetaChange = useCallback(
+    ({ recommendationCount, streak }: { recommendationCount: number; streak: number }) => {
+      setNotificationCount(recommendationCount);
+      setStreakCount(streak);
+    },
+    [],
+  );
 
   if (!authReady) {
     return (
@@ -179,20 +184,12 @@ function App() {
   };
 
   return (
-    <div className="app-layout">
-      {isCompactLayout && isSidebarOpen && (
-        <button
-          className="sidebar-backdrop"
-          aria-label="Close menu"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
+    <div className={`app-layout ${isSidebarExpanded ? 'sidebar-expanded' : ''}`}>
       <Sidebar
         currentPage={getCurrentPage()}
         onNavigate={navigate}
-        isOpen={isSidebarOpen}
-        isCompact={isCompactLayout}
-        onClose={() => setIsSidebarOpen(false)}
+        isExpanded={isSidebarExpanded}
+        onToggleExpanded={() => setIsSidebarExpanded((prev) => !prev)}
       />
 
       <div className="app-main">
@@ -200,8 +197,6 @@ function App() {
           user={user}
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
-          showSidebarToggle={isCompactLayout}
-          onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
           streakCount={streakCount}
           notificationCount={notificationCount}
         />
@@ -212,10 +207,7 @@ function App() {
             onOpenWhiteboard={() => setRoute({ type: 'whiteboard' })}
             onOpenNotes={() => setRoute({ type: 'notes' })}
             onOpenStudyTool={openStudyTool}
-            onDashboardMetaChange={({ recommendationCount, streak }) => {
-              setNotificationCount(recommendationCount);
-              setStreakCount(streak);
-            }}
+            onDashboardMetaChange={handleDashboardMetaChange}
           />
         )}
 

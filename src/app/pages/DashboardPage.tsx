@@ -24,6 +24,17 @@ interface InsightState {
   summary: string;
 }
 
+interface DashboardCacheEntry {
+  notebooks: NotebookRecord[];
+  insights: InsightState | null;
+  streak: number;
+  recommendationCount: number;
+  updatedAt: number;
+}
+
+const DASHBOARD_CACHE_KEY = 'stepwise_dashboard_cache_v1';
+const DASHBOARD_CACHE_TTL_MS = 1000 * 60 * 60 * 12;
+
 const buildFallbackInsights = (notebooks: NotebookInsightInput[]): InsightState => ({
   learningPlan: [
     {
@@ -84,6 +95,43 @@ const progressTone = (score: number) => {
   return 'weak';
 };
 
+const buildDashboardCacheUserKey = (user: any) =>
+  String(user?.id || user?.email || user?.name || 'anonymous');
+
+const readDashboardCache = (userKey: string): DashboardCacheEntry | null => {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, DashboardCacheEntry>;
+    const entry = parsed?.[userKey];
+    if (!entry) return null;
+    if (Date.now() - Number(entry.updatedAt || 0) > DASHBOARD_CACHE_TTL_MS) return null;
+    return {
+      notebooks: Array.isArray(entry.notebooks) ? entry.notebooks : [],
+      insights: entry.insights || null,
+      streak: Number(entry.streak || 0),
+      recommendationCount: Number(entry.recommendationCount || 0),
+      updatedAt: Number(entry.updatedAt || Date.now()),
+    };
+  } catch {
+    return null;
+  }
+};
+
+const writeDashboardCache = (userKey: string, entry: DashboardCacheEntry) => {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_CACHE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, DashboardCacheEntry>) : {};
+    parsed[userKey] = {
+      ...entry,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(DASHBOARD_CACHE_KEY, JSON.stringify(parsed));
+  } catch {
+    // Ignore cache write failures.
+  }
+};
+
 export function DashboardPage({
   user,
   onOpenWhiteboard,
@@ -91,15 +139,30 @@ export function DashboardPage({
   onOpenStudyTool,
   onDashboardMetaChange,
 }: DashboardPageProps) {
-  const [notebooks, setNotebooks] = useState<NotebookRecord[]>([]);
-  const [insights, setInsights] = useState<InsightState | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cacheUserKey = buildDashboardCacheUserKey(user);
+  const initialCache = readDashboardCache(cacheUserKey);
+  const [notebooks, setNotebooks] = useState<NotebookRecord[]>(initialCache?.notebooks || []);
+  const [insights, setInsights] = useState<InsightState | null>(initialCache?.insights || null);
+  const [loading, setLoading] = useState(!initialCache?.insights);
   const [error, setError] = useState('');
-  const [streak, setStreak] = useState(0);
+  const [streak, setStreak] = useState(initialCache?.streak || 0);
 
   useEffect(() => {
     const summary = getLearningStreakSummary();
     setStreak(summary.streak);
+    onDashboardMetaChange({
+      recommendationCount: insights?.recommendations?.length || initialCache?.recommendationCount || 0,
+      streak: summary.streak,
+    });
+    writeDashboardCache(cacheUserKey, {
+      notebooks,
+      insights,
+      streak: summary.streak,
+      recommendationCount: insights?.recommendations?.length || 0,
+      updatedAt: Date.now(),
+    });
+    // We intentionally run this only once to hydrate streak/meta quickly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -113,6 +176,13 @@ export function DashboardPage({
         const notebookData = (await listSubjects()) as NotebookRecord[];
         if (cancelled) return;
         setNotebooks(notebookData);
+        writeDashboardCache(cacheUserKey, {
+          notebooks: notebookData,
+          insights,
+          streak,
+          recommendationCount: insights?.recommendations?.length || 0,
+          updatedAt: Date.now(),
+        });
 
         const progressData = await Promise.all(
           notebookData.map(async (notebook) => {
@@ -148,10 +218,37 @@ export function DashboardPage({
         if (cancelled) return;
 
         if (progressData.length === 0) {
-          setInsights(buildFallbackInsights([]));
-          onDashboardMetaChange({ recommendationCount: 0, streak: getLearningStreakSummary().streak });
+          const emptyInsights = buildFallbackInsights([]);
+          const updatedStreak = getLearningStreakSummary().streak;
+          setInsights(emptyInsights);
+          setStreak(updatedStreak);
+          onDashboardMetaChange({ recommendationCount: 0, streak: updatedStreak });
+          writeDashboardCache(cacheUserKey, {
+            notebooks: notebookData,
+            insights: emptyInsights,
+            streak: updatedStreak,
+            recommendationCount: 0,
+            updatedAt: Date.now(),
+          });
           return;
         }
+
+        // Show deterministic fallback immediately, then refine with AI insights.
+        const stagedFallbackInsights = buildFallbackInsights(progressData);
+        setInsights(stagedFallbackInsights);
+        const fallbackStreak = getLearningStreakSummary().streak;
+        setStreak(fallbackStreak);
+        onDashboardMetaChange({
+          recommendationCount: stagedFallbackInsights.recommendations.length,
+          streak: fallbackStreak,
+        });
+        writeDashboardCache(cacheUserKey, {
+          notebooks: notebookData,
+          insights: stagedFallbackInsights,
+          streak: fallbackStreak,
+          recommendationCount: stagedFallbackInsights.recommendations.length,
+          updatedAt: Date.now(),
+        });
 
         const insightData = (await generateDashboardInsights(user?.name || 'Student', progressData)) as InsightState;
         if (cancelled) return;
@@ -163,23 +260,56 @@ export function DashboardPage({
           recommendationCount: insightData.recommendations?.length || 0,
           streak: updatedStreak,
         });
+        writeDashboardCache(cacheUserKey, {
+          notebooks: notebookData,
+          insights: insightData,
+          streak: updatedStreak,
+          recommendationCount: insightData.recommendations?.length || 0,
+          updatedAt: Date.now(),
+        });
       } catch (loadError) {
         if (cancelled) return;
         const notebookData = (await listSubjects().catch(() => [])) as NotebookRecord[];
-        const fallbackProgress = notebookData.map((notebook) => ({
-          notebook: notebook.name,
-          noteCount: 0,
-          assignmentCount: 0,
-          totalProblems: 0,
-          recentActivity: 'No recent activity',
-          progressScore: 0,
-        })) satisfies NotebookInsightInput[];
+        const fallbackProgress = await Promise.all(
+          notebookData.map(async (notebook) => {
+            const [notes, assignments] = await Promise.all([
+              listNotes(notebook.id).catch(() => []),
+              listAssignments(notebook.id).catch(() => []),
+            ]);
+            const typedNotes = notes as Array<{ updatedAt?: number }>;
+            const typedAssignments = assignments as Array<{ problemCount?: number; updatedAt?: number }>;
+            const totalProblems = typedAssignments.reduce((sum, assignment) => sum + Number(assignment.problemCount || 0), 0);
+            const latestActivity = Math.max(
+              0,
+              ...typedNotes.map((note) => Number(note.updatedAt || 0)),
+              ...typedAssignments.map((assignment) => Number(assignment.updatedAt || 0)),
+            );
+            return {
+              notebook: notebook.name,
+              noteCount: typedNotes.length,
+              assignmentCount: typedAssignments.length,
+              totalProblems,
+              recentActivity: latestActivity ? new Date(latestActivity).toLocaleDateString() : 'No recent activity',
+              progressScore: Math.min(100, typedNotes.length * 18 + typedAssignments.length * 12 + totalProblems * 4),
+            } satisfies NotebookInsightInput;
+          }),
+        );
         const fallbackInsights = buildFallbackInsights(fallbackProgress);
-        setInsights(fallbackInsights);
+        setNotebooks(notebookData);
+        setInsights((existing) => existing || fallbackInsights);
         setError(loadError instanceof Error ? loadError.message : 'AI insights are temporarily unavailable.');
+        const updatedStreak = getLearningStreakSummary().streak;
+        setStreak(updatedStreak);
         onDashboardMetaChange({
-          recommendationCount: fallbackInsights.recommendations.length,
-          streak: getLearningStreakSummary().streak,
+          recommendationCount: (insights || fallbackInsights).recommendations.length,
+          streak: updatedStreak,
+        });
+        writeDashboardCache(cacheUserKey, {
+          notebooks: notebookData,
+          insights: insights || fallbackInsights,
+          streak: updatedStreak,
+          recommendationCount: (insights || fallbackInsights).recommendations.length,
+          updatedAt: Date.now(),
         });
       } finally {
         if (!cancelled) {
@@ -192,7 +322,7 @@ export function DashboardPage({
     return () => {
       cancelled = true;
     };
-  }, [onDashboardMetaChange, user?.name]);
+  }, [cacheUserKey, onDashboardMetaChange, user?.name]);
 
   const firstNotebookId = notebooks[0]?.id;
   const mastery = useMemo(() => insights?.mastery || [], [insights]);
@@ -205,9 +335,10 @@ export function DashboardPage({
           <p>Let&apos;s continue your math journey today</p>
         </div>
 
-        {loading ? <div className="dashboard-empty">Building your AI dashboard...</div> : null}
+        {loading && !insights ? <div className="dashboard-empty">Building your AI dashboard...</div> : null}
+        {loading && insights ? <div className="dashboard-inline-note">Refreshing your dashboard with latest activity...</div> : null}
 
-        {!loading && (
+        {insights && (
           <>
             <div className="dashboard-top-grid">
               <div className="dashboard-card learning-plan-card">

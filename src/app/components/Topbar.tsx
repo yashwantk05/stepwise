@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { BellRing, Flame } from 'lucide-react';
+import { Flame } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
   onSignOut: () => void;
   onDeleteAccount: () => void;
-  showSidebarToggle?: boolean;
-  onToggleSidebar?: () => void;
   streakCount: number;
   notificationCount: number;
 }
@@ -15,8 +13,6 @@ export function Topbar({
   user,
   onSignOut,
   onDeleteAccount,
-  showSidebarToggle = false,
-  onToggleSidebar,
   streakCount,
   notificationCount,
 }: TopbarProps) {
@@ -54,13 +50,9 @@ export function Topbar({
   return (
     <div className="app-topbar">
       <div className="topbar-left">
-        {showSidebarToggle && (
-          <button className="icon-button sidebar-toggle-btn" onClick={onToggleSidebar} title="Open menu" aria-label="Open menu">
-            <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.4">
-              <path d="M3 5h14M3 10h14M3 15h14" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
+        <div className="main-page-logo" aria-label="StepWise">
+          M
+        </div>
       </div>
 
       <div className="topbar-actions">
@@ -70,7 +62,21 @@ export function Topbar({
         </div>
 
         <button className="icon-button notification-button" title="AI Recommendations">
-          <BellRing size={28} strokeWidth={2.2} />
+          {/* Inline SVG so sizing/styling is deterministic */}
+          <svg
+            width="40"
+            height="40"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 22a2 2 0 0 0 2-2H10a2 2 0 0 0 2 2Z" />
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 7h18s-3 0-3-7Z" />
+          </svg>
           {notificationCount > 0 ? <span className="notification-badge">{notificationCount}</span> : null}
         </button>
         <div style={{ position: 'relative' }} ref={menuRef}>

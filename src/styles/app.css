@@ -41,10 +41,17 @@ body {
 .app-layout {
   display: flex;
   min-height: 100vh;
+  /* Collapsed = icons-only; expanded = full labels. */
+  --sidebar-width: 72px;
+  --sidebar-width-expanded: min(240px, 75vw);
+}
+
+.app-layout.sidebar-expanded {
+  --sidebar-width: var(--sidebar-width-expanded);
 }
 
 .app-sidebar {
-  width: 240px;
+  width: var(--sidebar-width);
   background: var(--surface);
   border-right: 1px solid var(--line);
   display: flex;
@@ -54,15 +61,16 @@ body {
   top: 0;
   bottom: 0;
   z-index: 100;
-  transition: transform 0.25s ease;
+  transition: width 0.25s ease;
 }
 
 .app-main {
   flex: 1;
-  margin-left: 240px;
+  margin-left: var(--sidebar-width);
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  transition: margin-left 0.25s ease;
 }
 
 .app-topbar {
@@ -84,8 +92,21 @@ body {
   align-items: center;
 }
 
+.main-page-logo {
+  width: 44px;
+  height: 44px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-light));
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 700;
+  font-size: 18px;
+}
+
 .sidebar-toggle-btn {
-  display: none;
+  display: inline-flex;
 }
 
 .sidebar-toggle-btn svg {
@@ -153,8 +174,58 @@ body {
 
 .sidebar-nav {
   flex: 1;
-  padding: 16px 8px;
+  padding: 10px 8px;
   overflow-y: auto;
+}
+
+.sidebar-top-hamburger-row {
+  padding: 12px 12px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.icon-button.sidebar-hamburger-btn {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+}
+
+.icon-button.sidebar-hamburger-btn svg {
+  width: 34px;
+  height: 34px;
+}
+
+.nav-label {
+  text-align: left;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.app-sidebar.collapsed .sidebar-title {
+  display: none;
+}
+
+.app-sidebar.collapsed .sidebar-header {
+  padding: 20px 12px;
+  justify-content: center;
+}
+
+.app-sidebar.collapsed .sidebar-nav {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.app-sidebar.collapsed .nav-label {
+  display: none;
+}
+
+.app-sidebar.collapsed .nav-item {
+  justify-content: center;
+  text-align: center;
+  padding-left: 10px;
+  padding-right: 10px;
+  gap: 0;
 }
 
 .nav-item {
@@ -252,11 +323,16 @@ body {
 
 .notification-button {
   position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
 }
 
 .notification-button svg {
   color: #0f172a;
   display: block;
+  width: 40px;
+  height: 40px;
 }
 
 .notification-badge {
@@ -293,6 +369,14 @@ body {
 .icon-button:hover {
   background: var(--surface-light);
   color: var(--ink);
+}
+
+/* Keep notification bell larger than the generic icon-button */
+.notification-button.icon-button {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  overflow: visible; /* prevent SVG clipping */
 }
 
 .account-button {
@@ -1165,34 +1249,8 @@ textarea {
 
 /* Responsive */
 @media (max-width: 1024px) {
-  .app-sidebar {
-    transform: translateX(-100%);
-  }
-
-  .app-sidebar.open {
-    transform: translateX(0);
-  }
-
-  .app-main {
-    margin-left: 0;
-  }
-
   .topbar-search {
     max-width: none;
-  }
-
-  .sidebar-toggle-btn {
-    display: inline-flex;
-    width: 48px;
-    height: 48px;
-    padding: 0;
-    position: fixed;
-    left: 12px;
-    top: 12px;
-    z-index: 120;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    box-shadow: var(--shadow);
   }
 }
 
@@ -1226,8 +1284,8 @@ textarea {
 }
 
 /* Excalidraw overrides */
-.excalidraw button,
-.excalidraw button:hover {
+.excalidraw button:not(.ScrollBackToContent):not(.scroll-back-to-content),
+.excalidraw button:not(.ScrollBackToContent):not(.scroll-back-to-content):hover {
   all: revert;
 }
 

@@ -4,38 +4,34 @@ import { AlertTriangle, BarChart3, BrainCircuit, LayoutDashboard, NotebookPen, P
 interface SidebarProps {
   currentPage: string;
   onNavigate: (page: string) => void;
-  isOpen?: boolean;
-  isCompact?: boolean;
-  onClose?: () => void;
+  isExpanded?: boolean;
+  onToggleExpanded?: () => void;
 }
 
-export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = false, onClose }: SidebarProps) {
+export function Sidebar({
+  currentPage,
+  onNavigate,
+  isExpanded = false,
+  onToggleExpanded,
+}: SidebarProps) {
   const handleNavigate = (page: string) => {
     onNavigate(page);
-    if (isCompact) {
-      onClose?.();
-    }
   };
 
   return (
-    <div className={`app-sidebar ${isOpen ? 'open' : ''}`}>
-      <div className="sidebar-header">
-        <div className="sidebar-logo">M</div>
-        <div className="sidebar-title">
-          <h1>StepWise</h1>
-        </div>
-        {isCompact && (
-          <button
-            className="icon-button sidebar-close-btn"
-            onClick={onClose}
-            title="Toggle menu"
-            aria-label="Toggle menu"
-          >
-            <svg width="24" height="24" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.4">
-              <path d="M3 5h14M3 10h14M3 15h14" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
+    <div className={`app-sidebar ${isExpanded ? 'open' : 'collapsed'}`}>
+      <div className="sidebar-top-hamburger-row">
+        <button
+          className="icon-button sidebar-hamburger-btn"
+          onClick={onToggleExpanded}
+          title={isExpanded ? "Collapse menu" : "Expand menu"}
+          aria-label={isExpanded ? "Collapse menu" : "Expand menu"}
+        >
+          {/* Hamburger (inline SVG so we can control size precisely) */}
+          <svg width="30" height="30" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.6">
+            <path d="M3 5h14M3 10h14M3 15h14" strokeLinecap="round" />
+          </svg>
+        </button>
       </div>
 
       <nav className="sidebar-nav">
@@ -44,7 +40,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           onClick={() => handleNavigate('dashboard')}
         >
           <span className="nav-icon"><LayoutDashboard size={20} /></span>
-          Dashboard
+          <span className="nav-label">Dashboard</span>
         </button>
 
         <button
@@ -52,7 +48,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           onClick={() => handleNavigate('whiteboard')}
         >
           <span className="nav-icon"><PanelTopOpen size={20} /></span>
-          AI Whiteboard
+          <span className="nav-label">AI Whiteboard</span>
         </button>
 
         <button
@@ -60,7 +56,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           onClick={() => handleNavigate('weak-areas')}
         >
           <span className="nav-icon"><AlertTriangle size={20} /></span>
-          Weak Areas
+          <span className="nav-label">Weak Areas</span>
         </button>
 
         <button
@@ -68,7 +64,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           onClick={() => handleNavigate('progress-analytics')}
         >
           <span className="nav-icon"><BarChart3 size={20} /></span>
-          Progress Analytics
+          <span className="nav-label">Progress Analytics</span>
         </button>
 
         <button
@@ -76,7 +72,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           onClick={() => handleNavigate('socratic-tutor')}
         >
           <span className="nav-icon"><BrainCircuit size={20} /></span>
-          Socratic Tutor
+          <span className="nav-label">Socratic Tutor</span>
         </button>
 
         <button
@@ -84,7 +80,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
           onClick={() => handleNavigate('notes')}
         >
           <span className="nav-icon"><NotebookPen size={20} /></span>
-          My Notes
+          <span className="nav-label">My Notes</span>
         </button>
 
         <button
@@ -97,7 +93,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
               <path d="M7 8h6M7 12h4" strokeLinecap="round" />
             </svg>
           </span>
-          Flashcards
+          <span className="nav-label">Flashcards</span>
         </button>
 
         <button
@@ -111,7 +107,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
               <path d="M10 14h.01" strokeLinecap="round" />
             </svg>
           </span>
-          Quizzes
+          <span className="nav-label">Quizzes</span>
         </button>
 
         <button
@@ -126,7 +122,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
               <path d="M10 6v4M10 10l-6 4M10 10l6 4" strokeLinecap="round" />
             </svg>
           </span>
-          Mind Maps
+          <span className="nav-label">Mind Maps</span>
         </button>
 
         <button
@@ -140,7 +136,7 @@ export function Sidebar({ currentPage, onNavigate, isOpen = false, isCompact = f
               <path d="M7 10h6M7 13h6" strokeLinecap="round" />
             </svg>
           </span>
-          Revision Sheet
+          <span className="nav-label">Revision Sheet</span>
         </button>
       </nav>
     </div>

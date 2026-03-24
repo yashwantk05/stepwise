@@ -71,8 +71,12 @@ import {
   insertNotebookSubject,
   removeNotebookSubject,
   listNotebookNotes,
+  listSocraticChatThreads,
+  listSocraticChatMessages,
   getNotebookNote,
+  createSocraticChatThread,
   insertNotebookNote,
+  insertSocraticChatMessage,
   updateNotebookNote,
   removeNotebookNote,
   listAllNotebookNotesForUser,
@@ -2154,7 +2158,8 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const message = String(request.body?.message || "").trim();
   const history = Array.isArray(request.body?.history) ? request.body.history : [];
   const subjectId = request.body?.subjectId || null;
-  const context = request.body?.context || {}; // { topic, concept, errorType }
+  const context = request.body?.context || {}; // { topic, concept, errorType, responseFormat }
+  const threadId = String(request.body?.threadId || "").trim();
   const audioBase64 = String(request.body?.audioBase64 || "").trim();
   const images = Array.isArray(request.body?.images) ? request.body.images : [];
   const rawClassLevel = Number(request.body?.classLevel);
@@ -2259,7 +2264,12 @@ If there is relevant notes context provided below, use it to provide personalize
 If the student sends audio, transcribe their speech internally and respond to the content of what they said.
 If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and guide the student based on the visual content.
 If source images from the student's notebook are included in this conversation, use them to provide visual references and better explanations. Reference specific diagrams or figures when helpful.
-Current learning context: Topic: ${context.topic || "unknown"}, Concept: ${context.concept || "unknown"}, recent error: ${context.errorType || "none"}.
+Current learning context: Topic: ${context.topic || "unknown"}.
+Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
+Formatting rules:
+- If response format is "steps": provide 3-4 numbered steps max, each concise, then 1 short check question.
+- If response format is "voice": provide at most 3 short sentences in spoken style.
+- Keep the full response compact and avoid long paragraphs.
 
 ${noteContext}`;
 
@@ -2318,11 +2328,32 @@ ${noteContext}`;
       { role: "user", content: userContent }
     ];
 
-    const replyText = await requestAzureChatCompletion({ 
+    const replyText = await requestAzureChatCompletion({
       messages: promptMessages, 
-      maxTokens: 300, 
+      maxTokens: 180, 
       temperature: 0.5 
     });
+
+    if (dbReady && threadId) {
+      const userMessageForHistory = message || (audioBase64 ? "(Voice input)" : images.length > 0 ? "(Image input)" : "");
+      const now = Date.now();
+      await insertSocraticChatMessage(request.user.id, {
+        threadId,
+        role: "user",
+        text: userMessageForHistory,
+        createdAt: now,
+      }).catch((persistError) => {
+        console.warn("Failed to persist Socratic user message:", persistError.message);
+      });
+      await insertSocraticChatMessage(request.user.id, {
+        threadId,
+        role: "assistant",
+        text: replyText,
+        createdAt: now + 1,
+      }).catch((persistError) => {
+        console.warn("Failed to persist Socratic assistant message:", persistError.message);
+      });
+    }
 
     response.json({ 
       reply: replyText, 
@@ -2333,6 +2364,24 @@ ${noteContext}`;
     console.error("Socratic chat failed:", error.message);
     response.status(500).json({ message: "Unable to process Socratic chat request." });
   }
+});
+
+app.get("/api/socratic/threads", requireDb, requireAuth, async (request, response) => {
+  const limit = clampLimit(request.query?.limit, 50, 200);
+  const threads = await listSocraticChatThreads(request.user.id, limit);
+  response.json({ threads });
+});
+
+app.post("/api/socratic/threads", requireDb, requireAuth, async (request, response) => {
+  const title = normalizeBoundedText(request.body?.title || "New chat", 120) || "New chat";
+  const thread = await createSocraticChatThread(request.user.id, title);
+  response.status(201).json(thread);
+});
+
+app.get("/api/socratic/threads/:threadId/messages", requireDb, requireAuth, async (request, response) => {
+  const limit = clampLimit(request.query?.limit, 200, 500);
+  const messages = await listSocraticChatMessages(request.user.id, request.params.threadId, limit);
+  response.json({ messages });
 });
 
 // Azure Speech Token endpoint

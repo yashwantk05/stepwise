@@ -1,10 +1,9 @@
-// REMOVE lines 1–8, REPLACE WITH:
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus } from 'lucide-react';
+import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus, MessageSquarePlus, PanelLeft } from 'lucide-react';
 import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
-import { getErrorSummary, getProblemErrors, getUserSettings, listSubjects } from '../services/storage';
-import { sendSocraticChat, getSpeechToken } from '../services/studyTools';
+import { getUserSettings, listSubjects } from '../services/storage';
+import { createSocraticThread, getSpeechToken, getSocraticChatHistory, getSocraticThreadMessages, sendSocraticChat } from '../services/studyTools';
 import * as speechSdk from 'microsoft-cognitiveservices-speech-sdk';
 
 // Extend window for mathlive
@@ -84,20 +83,6 @@ interface SubjectRecord {
   name: string;
 }
 
-interface ErrorSummaryRecord {
-  label?: string;
-  topic?: string;
-  count?: number;
-  mistakes?: number;
-}
-
-interface ProblemErrorAttemptRecord {
-  summary?: string;
-  errorType?: string;
-  items?: Array<Record<string, unknown>>;
-  mistakes?: Array<Record<string, unknown>>;
-}
-
 interface AttachedImage {
   id: string;
   file: File;
@@ -114,6 +99,14 @@ interface ChatMessage {
   images?: { previewUrl: string }[];
 }
 
+interface ChatThread {
+  id: string;
+  title: string;
+  preview: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 const extractTopicFromText = (text: string, notebookOptions: string[]) => {
   const lowered = text.toLowerCase();
   const notebookMatch = notebookOptions.find((entry) => lowered.includes(entry.toLowerCase()));
@@ -125,6 +118,36 @@ const extractTopicFromText = (text: string, notebookOptions: string[]) => {
   return '';
 };
 
+const formatAssistantReply = (reply: string) =>
+  String(reply || '')
+    .trim()
+    // Put numbered points on separate lines for readability.
+    .replace(/\s+(?=\d+\.\s)/g, '\n')
+    // Normalize dash bullets into separate lines.
+    .replace(/\s+-\s+/g, '\n- ')
+    .replace(/\n{3,}/g, '\n\n');
+
+const formatSpeechText = (reply: string) =>
+  String(reply || '')
+    .replace(/\(Based on your notes\)/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const formatChatTime = (createdAt?: number) => {
+  const value = Number(createdAt);
+  if (!Number.isFinite(value) || value <= 0) {
+    return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
+  id: 'assistant-initial',
+  role: 'assistant',
+  text: "Want to understand this better? Let’s work through it step by step.",
+  time: formatChatTime(Date.now()),
+};
+
 
 export function SocraticTutorPage({
   initialContext,
@@ -132,76 +155,246 @@ export function SocraticTutorPage({
   initialContext?: Partial<TutorContextState>;
 }) {
   const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
-  const [topErrors, setTopErrors] = useState<ErrorSummaryRecord[]>([]);
-  const [problemErrors, setProblemErrors] = useState<ProblemErrorAttemptRecord[]>([]);
   const [context, setContext] = useState<TutorContextState>({
     topic: initialContext?.topic || '',
-    concept: initialContext?.concept || '',
-    errorType: initialContext?.errorType || '',
-    source: initialContext?.source || 'manual',
+    concept: '',
+    errorType: '',
+    source: 'manual',
     assignmentId: initialContext?.assignmentId,
     problemIndex: initialContext?.problemIndex,
   });
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'assistant-initial',
-      role: 'assistant',
-      text: "Want to understand this better? Let’s work through it step by step.",
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    },
-  ]);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [activeMode, setActiveMode] = useState<'voice' | 'image' | 'equation' | null>(null);
-  const [activeOption, setActiveOption] = useState<'voice' | 'diagram' | 'steps'>('diagram');
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [playingAssistantMessageId, setPlayingAssistantMessageId] = useState<string | null>(null);
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recognizerRef = useRef<speechSdk.SpeechRecognizer | null>(null);
+  const synthesizerRef = useRef<speechSdk.SpeechSynthesizer | null>(null);
+  const speechPlayerRef = useRef<speechSdk.SpeakerAudioDestination | null>(null);
+  const playingAssistantMessageIdRef = useRef<string | null>(null);
+  const speechSessionRef = useRef(0);
   const audioChunksRef = useRef<Blob[]>([]);
   const [isRecording, setIsRecording] = useState(false);
 
   useEffect(() => {
     listSubjects().then((rows) => setSubjects(rows as SubjectRecord[])).catch(() => {});
-    getErrorSummary('topic').then((rows) => setTopErrors(rows as ErrorSummaryRecord[])).catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (!context.assignmentId || !context.problemIndex) return;
-    getProblemErrors(context.assignmentId, context.problemIndex)
-      .then((rows) => setProblemErrors(rows as ProblemErrorAttemptRecord[]))
-      .catch(() => setProblemErrors([]));
-  }, [context.assignmentId, context.problemIndex]);
+    let mounted = true;
+    getSocraticChatHistory(200)
+      .then((payload) => {
+        if (!mounted) return;
+        const loaded = Array.isArray(payload?.threads)
+          ? payload.threads.map((thread) => ({
+            id: thread.id,
+            title: String(thread.title || 'New chat'),
+            preview: String(thread.preview || ''),
+            createdAt: Number(thread.createdAt || Date.now()),
+            updatedAt: Number(thread.updatedAt || Date.now()),
+          }))
+          : [];
+        setThreads(loaded);
+        if (loaded.length > 0) {
+          setActiveThreadId((current) => current || loaded[0].id);
+          return;
+        }
+        setMessages((current) => (current.length > 0 ? current : [INITIAL_ASSISTANT_MESSAGE]));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setMessages((current) => (current.length > 0 ? current : [INITIAL_ASSISTANT_MESSAGE]));
+      });
 
-  const notebookOptions = useMemo(() => subjects.map((subject) => subject.name), [subjects]);
-  const weakTopic = useMemo(
-    () =>
-      [...topErrors]
-        .sort((a, b) => Number(b.count || b.mistakes || 0) - Number(a.count || a.mistakes || 0))[0]
-        ?.topic ||
-      [...topErrors]
-        .sort((a, b) => Number(b.count || b.mistakes || 0) - Number(a.count || a.mistakes || 0))[0]
-        ?.label ||
-      '',
-    [topErrors],
-  );
-  const recentErrorType = useMemo(
-    () => problemErrors[0]?.errorType || (problemErrors[0]?.items?.[0]?.type as string) || '',
-    [problemErrors],
-  );
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!context.topic && weakTopic) {
-      setContext((current) => ({ ...current, topic: weakTopic, source: 'weak-areas' }));
-    }
-  }, [context.topic, weakTopic]);
+    if (!activeThreadId) return;
+    let mounted = true;
+    getSocraticThreadMessages(activeThreadId, 200)
+      .then((payload) => {
+        if (!mounted) return;
+        const loaded = Array.isArray(payload?.messages)
+          ? payload.messages.map((msg) => ({
+            id: msg.id,
+            role: msg.role === 'assistant' ? 'assistant' : 'user',
+            text: msg.role === 'assistant' ? formatAssistantReply(msg.text) : String(msg.text || ''),
+            time: formatChatTime(msg.createdAt),
+          }))
+          : [];
+        setMessages(loaded.length > 0 ? loaded : [INITIAL_ASSISTANT_MESSAGE]);
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setMessages([INITIAL_ASSISTANT_MESSAGE]);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeThreadId]);
+
+  const notebookOptions = useMemo(() => subjects.map((subject) => subject.name), [subjects]);
   
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const stopAssistantSpeech = useCallback(() => {
+    speechSessionRef.current += 1;
+    const activeSynthesizer = synthesizerRef.current;
+    const activePlayer = speechPlayerRef.current;
+    synthesizerRef.current = null;
+    speechPlayerRef.current = null;
+    if (activeSynthesizer) {
+      if (typeof activeSynthesizer.stopSpeakingAsync === 'function') {
+        activeSynthesizer.stopSpeakingAsync(
+          () => {
+            activeSynthesizer.close();
+          },
+          () => {
+            activeSynthesizer.close();
+          },
+        );
+      } else {
+        activeSynthesizer.close();
+      }
+    }
+    if (activePlayer) {
+      try {
+        activePlayer.pause();
+      } catch {}
+      try {
+        const audio = activePlayer.internalAudio;
+        if (audio) {
+          audio.pause();
+          audio.removeAttribute('src');
+          audio.srcObject = null;
+          audio.load();
+        }
+      } catch {}
+      try {
+        activePlayer.close();
+      } catch {}
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    playingAssistantMessageIdRef.current = null;
+    setPlayingAssistantMessageId(null);
+  }, []);
+
+  const speakAssistantReply = useCallback(async (messageId: string, text: string) => {
+    const utteranceText = formatSpeechText(text);
+    if (!utteranceText) return;
+
+    stopAssistantSpeech();
+    const sessionId = speechSessionRef.current + 1;
+    speechSessionRef.current = sessionId;
+    playingAssistantMessageIdRef.current = messageId;
+    setPlayingAssistantMessageId(messageId);
+    let azureSpeakAttempted = false;
+
+    try {
+      const { token, region } = await getSpeechToken();
+      if (speechSessionRef.current !== sessionId) return;
+      const speechConfig = speechSdk.SpeechConfig.fromAuthorizationToken(token, region);
+      speechConfig.speechSynthesisVoiceName = 'en-US-AriaNeural';
+      const player = new speechSdk.SpeakerAudioDestination();
+      player.onAudioEnd = () => {
+        if (speechPlayerRef.current === player) {
+          speechPlayerRef.current = null;
+        }
+        if (speechSessionRef.current === sessionId) {
+          playingAssistantMessageIdRef.current = null;
+          setPlayingAssistantMessageId(null);
+        }
+      };
+      speechPlayerRef.current = player;
+      const audioConfig = speechSdk.AudioConfig.fromSpeakerOutput(player);
+      const synthesizer = new speechSdk.SpeechSynthesizer(speechConfig, audioConfig);
+      if (speechSessionRef.current !== sessionId) {
+        player.close();
+        synthesizer.close();
+        return;
+      }
+      synthesizerRef.current = synthesizer;
+
+      await new Promise<void>((resolve, reject) => {
+        azureSpeakAttempted = true;
+        synthesizer.speakTextAsync(
+          utteranceText,
+          () => {
+            synthesizer.close();
+            if (synthesizerRef.current === synthesizer) {
+              synthesizerRef.current = null;
+            }
+            resolve();
+          },
+          (error) => {
+            synthesizer.close();
+            if (synthesizerRef.current === synthesizer) {
+              synthesizerRef.current = null;
+            }
+            if (speechPlayerRef.current === player) {
+              player.close();
+              speechPlayerRef.current = null;
+            }
+            reject(error);
+          }
+        );
+      });
+      return;
+    } catch (error) {
+      if (speechSessionRef.current !== sessionId) return;
+      // Avoid duplicate playback when Azure already attempted to speak.
+      if (azureSpeakAttempted) {
+        playingAssistantMessageIdRef.current = null;
+        setPlayingAssistantMessageId(null);
+        return;
+      }
+      console.warn('Azure TTS unavailable, falling back to browser speech.', error);
+    }
+
+    if (speechSessionRef.current !== sessionId) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      playingAssistantMessageIdRef.current = null;
+      setPlayingAssistantMessageId(null);
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(utteranceText);
+    utterance.lang = 'en-US';
+    utterance.onend = () => {
+      if (speechSessionRef.current === sessionId) {
+        playingAssistantMessageIdRef.current = null;
+        setPlayingAssistantMessageId(null);
+      }
+    };
+    utterance.onerror = () => {
+      if (speechSessionRef.current === sessionId) {
+        playingAssistantMessageIdRef.current = null;
+        setPlayingAssistantMessageId(null);
+      }
+    };
+    window.speechSynthesis.speak(utterance);
+  }, [stopAssistantSpeech]);
+
+  useEffect(() => () => {
+    stopAssistantSpeech();
+  }, [stopAssistantSpeech]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -270,7 +463,6 @@ export function SocraticTutorPage({
     const nextContext = {
       ...context,
       topic: autoTopic || context.topic,
-      source: context.topic ? context.source : autoTopic ? 'auto' as const : context.source,
     };
     setContext(nextContext);
 
@@ -299,16 +491,24 @@ export function SocraticTutorPage({
     setIsLoading(true);
 
     try {
+      let threadId = activeThreadId;
+      if (!threadId) {
+        const titleSeed = trimmed || 'New chat';
+        const createdThread = await createSocraticThread(titleSeed.slice(0, 120));
+        threadId = createdThread.id;
+        setThreads((current) => [createdThread, ...current.filter((item) => item.id !== createdThread.id)]);
+        setActiveThreadId(createdThread.id);
+      }
+
       const history = messages.map(m => ({ role: m.role, text: m.text }));
       const selectedClassLevel = getUserSettings().classLevel;
       const response = await sendSocraticChat(trimmed, history, {
+        threadId,
         classLevel: selectedClassLevel || undefined,
         audioBase64,
         images: imagePayloads.length > 0 ? imagePayloads : undefined,
         context: {
-          topic: nextContext.topic || weakTopic,
-          concept: nextContext.concept,
-          errorType: nextContext.errorType || recentErrorType,
+          topic: nextContext.topic,
         }
       });
 
@@ -317,10 +517,25 @@ export function SocraticTutorPage({
         {
           id: `assistant-${Date.now() + 1}`,
           role: 'assistant',
-          text: response.reply + (response.usedNotes ? '\n\n*(Based on your notes)*' : ''),
+          text: formatAssistantReply(response.reply) + (response.usedNotes ? '\n\n(Based on your notes)' : ''),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
+      if (threadId) {
+        const nextTitle = trimmed ? trimmed.slice(0, 120) : 'New chat';
+        const nextPreview = formatAssistantReply(response.reply).split('\n')[0] || trimmed || 'New chat';
+        setThreads((current) => {
+          const existing = current.find((item) => item.id === threadId);
+          const updatedThread: ChatThread = {
+            id: threadId,
+            title: existing && existing.title !== 'New chat' ? existing.title : nextTitle,
+            preview: nextPreview,
+            createdAt: existing?.createdAt || Date.now(),
+            updatedAt: Date.now(),
+          };
+          return [updatedThread, ...current.filter((item) => item.id !== threadId)];
+        });
+      }
     } catch (err) {
       setMessages((current) => [
         ...current,
@@ -334,7 +549,25 @@ export function SocraticTutorPage({
     } finally {
       setIsLoading(false);
     }
-  }, [context, draft, attachedImages, notebookOptions, recentErrorType, weakTopic, isLoading, messages]);
+  }, [context, draft, attachedImages, notebookOptions, isLoading, messages]);
+
+  const handleNewChat = useCallback(async () => {
+    setDraft('');
+    setAttachedImages([]);
+    stopAssistantSpeech();
+    const thread = await createSocraticThread('New chat');
+    setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)]);
+    setActiveThreadId(thread.id);
+    setMessages([INITIAL_ASSISTANT_MESSAGE]);
+  }, [stopAssistantSpeech]);
+
+  const handleToggleAssistantMessageAudio = useCallback((messageId: string, text: string) => {
+    if (playingAssistantMessageIdRef.current === messageId) {
+      stopAssistantSpeech();
+      return;
+    }
+    void speakAssistantReply(messageId, text);
+  }, [speakAssistantReply, stopAssistantSpeech]);
 
   const stopRecording = useCallback(() => {
     setIsRecording(false);
@@ -421,16 +654,28 @@ export function SocraticTutorPage({
 
       {/* Top bar */}
       <header className="socratic-topbar">
-        <div className="socratic-topbar-title">
-          <h1>Socratic Tutor</h1>
-          <p>Learn by thinking, guided step by step</p>
+          <div className="socratic-topbar-title">
+          <div className="socratic-topbar-main">
+            <button
+              type="button"
+              className={`socratic-history-toggle ${isHistoryOpen ? 'open' : ''}`}
+              onClick={() => setIsHistoryOpen((current) => !current)}
+              aria-label={isHistoryOpen ? 'Close chat history' : 'Open chat history'}
+            >
+              <PanelLeft size={16} />
+            </button>
+            <div>
+              <h1>Socratic Tutor</h1>
+              <p>Learn by thinking, guided step by step</p>
+            </div>
+          </div>
         </div>
         <button
           type="button"
           className={`socratic-panel-toggle ${panelOpen ? 'open' : ''}`}
           onClick={() => setPanelOpen((v) => !v)}
         >
-          <span>Context &amp; Options</span>
+          <span>Topic</span>
           <ChevronUp size={13} className="socratic-chevron" />
         </button>
       </header>
@@ -444,67 +689,57 @@ export function SocraticTutorPage({
               type="text"
               value={context.topic}
               list="socratic-topic-list"
-              onChange={(e) => setContext((c) => ({ ...c, topic: e.target.value, source: 'manual' }))}
+              onChange={(e) => setContext((c) => ({ ...c, topic: e.target.value }))}
               placeholder="Quadratic Equations"
             />
             <datalist id="socratic-topic-list">
               {notebookOptions.map((o) => <option key={o} value={o} />)}
             </datalist>
           </div>
-
-          <div className="socratic-ctx-box">
-            <span className="socratic-ctx-label">Concept</span>
-            <input
-              type="text"
-              value={context.concept}
-              onChange={(e) => setContext((c) => ({ ...c, concept: e.target.value, source: 'manual' }))}
-              placeholder="Factoring"
-            />
-          </div>
-
-          <div className="socratic-ctx-box">
-            <span className="socratic-ctx-label">Focus / Error type</span>
-            <input
-              type="text"
-              value={context.errorType}
-              onChange={(e) => setContext((c) => ({ ...c, errorType: e.target.value, source: 'manual' }))}
-              placeholder="Sign Errors"
-            />
-          </div>
-
-          <div className="socratic-ctx-box">
-            <span className="socratic-ctx-label">Response format</span>
-            <div className="socratic-ctx-pills">
-              {(['diagram', 'steps', 'voice'] as const).map((opt) => (
-                <button
-                  key={opt}
-                  type="button"
-                  className={`socratic-ctx-pill ${activeOption === opt ? 'active' : ''}`}
-                  onClick={() => setActiveOption(opt)}
-                >
-                  {opt}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="socratic-ctx-box">
-            <span className="socratic-ctx-label">Weak area</span>
-            <span className="socratic-ctx-value">{weakTopic || 'None detected yet'}</span>
-          </div>
-
-          <div className="socratic-ctx-box">
-            <span className="socratic-ctx-label">Source</span>
-            <span className="socratic-ctx-value">{context.source}</span>
-          </div>
         </div>
       </div>
 
-      {/* Chat column */}
       <div className="socratic-body">
+        {isHistoryOpen && (
+          <button
+            type="button"
+            className="socratic-history-backdrop"
+            onClick={() => setIsHistoryOpen(false)}
+            aria-label="Close chat history"
+          />
+        )}
+
+        <aside className={`socratic-history-rail ${isHistoryOpen ? 'open' : ''}`}>
+          <button type="button" className="socratic-new-chat-btn" onClick={() => void handleNewChat()}>
+            <MessageSquarePlus size={15} />
+            <span>New chat</span>
+          </button>
+
+          <div className="socratic-history-list">
+            {threads.map((thread) => (
+              <button
+                key={thread.id}
+                type="button"
+                className={`socratic-history-item ${activeThreadId === thread.id ? 'active' : ''}`}
+                onClick={() => {
+                  setActiveThreadId(thread.id);
+                  setIsHistoryOpen(false);
+                }}
+              >
+                <strong>{thread.title || 'New chat'}</strong>
+                <span>{thread.preview || 'Open conversation'}</span>
+              </button>
+            ))}
+          </div>
+        </aside>
+
         <div className="socratic-chat-col">
           <div className="socratic-chat-scroll">
-            <SocraticChat messages={messages} />
+            <SocraticChat
+              messages={messages}
+              playingAssistantMessageId={playingAssistantMessageId}
+              onToggleAssistantMessageAudio={handleToggleAssistantMessageAudio}
+            />
             <div ref={chatEndRef} />
           </div>
 

@@ -56,9 +56,10 @@ export async function sendSocraticChat(
   message: string,
   history: { role: string; text: string }[],
   options?: {
+    threadId?: string;
     subjectId?: string;
     classLevel?: number;
-    context?: { topic?: string; concept?: string; errorType?: string };
+    context?: { topic?: string; concept?: string; errorType?: string; responseFormat?: "steps" | "voice" };
     audioBase64?: string;
     images?: { base64: string; mimeType: string }[];
   }
@@ -83,6 +84,65 @@ export async function sendSocraticChat(
   }
 
   return payload as { reply: string; usedNotes: boolean; usedNoteImages: boolean };
+}
+
+export async function getSocraticChatHistory(limit = 200) {
+  const response = await fetch(`${API_BASE}/socratic/threads?limit=${encodeURIComponent(String(limit))}`, {
+    method: "GET",
+    credentials: "include",
+    headers: {
+      ...buildDevHeaders(),
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.message || "Failed to load Socratic chat history."));
+  }
+
+  return payload as {
+    threads: Array<{ id: string; title: string; preview: string; createdAt: number; updatedAt: number }>;
+  };
+}
+
+export async function createSocraticThread(title = "New chat") {
+  const response = await fetch(`${API_BASE}/socratic/threads`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildDevHeaders(),
+    },
+    body: JSON.stringify({ title }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.message || "Failed to create Socratic chat."));
+  }
+  return payload as { id: string; title: string; preview: string; createdAt: number; updatedAt: number };
+}
+
+export async function getSocraticThreadMessages(threadId: string, limit = 200) {
+  const response = await fetch(
+    `${API_BASE}/socratic/threads/${encodeURIComponent(threadId)}/messages?limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: "GET",
+      credentials: "include",
+      headers: {
+        ...buildDevHeaders(),
+      },
+    },
+  );
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.message || "Failed to load Socratic messages."));
+  }
+
+  return payload as {
+    messages: Array<{ id: string; role: "assistant" | "user"; text: string; createdAt: number }>;
+  };
 }
 
 export async function getSpeechToken(): Promise<{ token: string; region: string }> {

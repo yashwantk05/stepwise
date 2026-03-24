@@ -3413,6 +3413,33 @@ textarea {
   color: var(--muted);
 }
 
+.socratic-topbar-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.socratic-history-toggle {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-light);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.socratic-history-toggle:hover,
+.socratic-history-toggle.open {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: #ede9fe;
+}
+
 .socratic-panel-toggle {
   display: flex;
   align-items: center;
@@ -3462,7 +3489,7 @@ textarea {
 
 .socratic-context-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   padding: 14px 20px;
 }
@@ -3531,13 +3558,119 @@ textarea {
   flex: 1;
   overflow: hidden;
   display: flex;
+  justify-content: stretch;
+  gap: 0;
+  position: relative;
+}
+
+.socratic-history-rail {
+  width: 280px;
+  border-right: 1px solid var(--line);
+  background: var(--surface-light);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 12px;
+  flex-shrink: 0;
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 20;
+  transform: translateX(-100%);
+  transition: transform 0.2s ease;
+  box-shadow: 18px 0 40px rgba(15, 23, 42, 0.08);
+}
+
+.socratic-history-rail.open {
+  transform: translateX(0);
+}
+
+.socratic-history-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: rgba(15, 23, 42, 0.12);
+}
+
+.socratic-new-chat-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.socratic-new-chat-btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.socratic-history-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.socratic-history-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.socratic-history-item:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.socratic-history-item.active {
+  background: var(--surface);
+  border-color: var(--brand);
+}
+
+.socratic-history-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.socratic-history-item span {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .socratic-chat-col {
   display: flex;
   flex-direction: column;
   width: 100%;
+  min-width: 0;
 }
 
 .socratic-chat-scroll {
@@ -3691,10 +3824,11 @@ textarea {
 }
 
 .socratic-page-v2 .socratic-bubble {
-  max-width: min(80%, 620px);
+  max-width: min(74%, 560px);
   padding: 12px 14px;
   border-radius: 16px;
   gap: 6px;
+  position: relative;
 }
 
 .socratic-page-v2 .socratic-bubble-assistant {
@@ -3713,6 +3847,50 @@ textarea {
 .socratic-page-v2 .socratic-bubble span {
   font-size: 12px;
   opacity: 0.72;
+}
+
+.socratic-page-v2 .socratic-bubble p {
+  margin: 0;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.socratic-bubble-play {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--brand-dark);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  z-index: 1;
+}
+
+.socratic-bubble-play svg {
+  flex-shrink: 0;
+  stroke: currentColor;
+}
+
+.socratic-bubble-play:hover {
+  background: #ffffff;
+  border-color: var(--brand);
+}
+
+.socratic-bubble-play:active {
+  transform: scale(0.96);
+}
+
+.socratic-page-v2 .socratic-bubble-assistant {
+  padding-right: 48px;
 }
 
 /* Image previews in input bar */
@@ -3815,8 +3993,12 @@ textarea {
 
 /* Responsive */
 @media (max-width: 860px) {
+  .socratic-history-rail {
+    width: min(280px, calc(100vw - 32px));
+  }
+
   .socratic-context-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     padding: 12px 14px;
   }
 

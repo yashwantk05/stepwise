@@ -317,6 +317,67 @@ export const initDb = async () => {
       CREATE INDEX IF NOT EXISTS idx_notebook_notes_subject
       ON notebook_notes (user_id, subject_id, updated_at DESC);
     `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS socratic_chat_threads (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '',
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
+
+    await activePool.query(`
+      CREATE INDEX IF NOT EXISTS idx_socratic_chat_threads_user
+      ON socratic_chat_threads (user_id, updated_at DESC);
+    `);
+
+    await activePool.query(`
+      CREATE TABLE IF NOT EXISTS socratic_chat_messages (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        thread_id TEXT REFERENCES socratic_chat_threads(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        created_at BIGINT NOT NULL
+      );
+    `);
+
+    await activePool.query(`
+      ALTER TABLE socratic_chat_messages
+      ADD COLUMN IF NOT EXISTS thread_id TEXT REFERENCES socratic_chat_threads(id) ON DELETE CASCADE;
+    `);
+
+    await activePool.query(`
+      CREATE INDEX IF NOT EXISTS idx_socratic_chat_messages_user
+      ON socratic_chat_messages (user_id, created_at DESC);
+    `);
+
+    await activePool.query(`
+      CREATE INDEX IF NOT EXISTS idx_socratic_chat_messages_thread
+      ON socratic_chat_messages (user_id, thread_id, created_at ASC);
+    `);
+
+    await activePool.query(`
+      INSERT INTO socratic_chat_threads (id, user_id, title, created_at, updated_at)
+      SELECT
+        'socratic-thread-legacy-' || md5(user_id),
+        user_id,
+        'Previous chat',
+        MIN(created_at),
+        MAX(created_at)
+      FROM socratic_chat_messages
+      WHERE thread_id IS NULL
+      GROUP BY user_id
+      ON CONFLICT (id) DO NOTHING;
+    `);
+
+    await activePool.query(`
+      UPDATE socratic_chat_messages
+      SET thread_id = 'socratic-thread-legacy-' || md5(user_id)
+      WHERE thread_id IS NULL;
+    `);
   })();
 
   return initPromise;
@@ -1684,4 +1745,114 @@ export const listNotebookNoteBlobNames = async (userId) => {
     [userId],
   );
   return rows.map((r) => r.blob_name).filter(Boolean);
+};
+
+const mapSocraticChatThread = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  title: String(row.title || "New chat"),
+  preview: String(row.preview || ""),
+  createdAt: Number(row.created_at),
+  updatedAt: Number(row.updated_at),
+});
+
+const mapSocraticChatMessage = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  threadId: row.thread_id,
+  role: row.role === "assistant" ? "assistant" : "user",
+  text: String(row.content || ""),
+  createdAt: Number(row.created_at),
+});
+
+export const createSocraticChatThread = async (userId, title = "New chat") => {
+  const now = Date.now();
+  const id = `socratic-thread-${now}-${Math.random().toString(36).slice(2, 10)}`;
+  const safeTitle = String(title || "").trim().slice(0, 120) || "New chat";
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO socratic_chat_threads (id, user_id, title, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $4)
+      RETURNING id, user_id, title, '' AS preview, created_at, updated_at;
+    `,
+    [id, userId, safeTitle, now],
+  );
+  return mapSocraticChatThread(rows[0]);
+};
+
+export const listSocraticChatThreads = async (userId, limit = 50) => {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const { rows } = await getPool().query(
+    `
+      SELECT
+        t.id,
+        t.user_id,
+        t.title,
+        t.created_at,
+        t.updated_at,
+        COALESCE((
+          SELECT m.content
+          FROM socratic_chat_messages m
+          WHERE m.thread_id = t.id
+          ORDER BY m.created_at DESC
+          LIMIT 1
+        ), '') AS preview
+      FROM socratic_chat_threads t
+      WHERE t.user_id = $1
+      ORDER BY t.updated_at DESC
+      LIMIT $2;
+    `,
+    [userId, safeLimit],
+  );
+  return rows.map(mapSocraticChatThread);
+};
+
+export const insertSocraticChatMessage = async (userId, { threadId, role, text, createdAt = Date.now() }) => {
+  const safeRole = role === "assistant" ? "assistant" : "user";
+  const safeText = String(text || "").trim();
+  const safeCreatedAt = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.now();
+  const id = `socratic-msg-${safeCreatedAt}-${Math.random().toString(36).slice(2, 10)}`;
+  const safeThreadId = String(threadId || "").trim();
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO socratic_chat_messages (id, user_id, thread_id, role, content, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id, user_id, thread_id, role, content, created_at;
+    `,
+    [id, userId, safeThreadId, safeRole, safeText, safeCreatedAt],
+  );
+  await getPool().query(
+    `
+      UPDATE socratic_chat_threads
+      SET
+        updated_at = GREATEST(updated_at, $3),
+        title = CASE
+          WHEN title = 'New chat' AND $4 <> '' AND $5 = 'user' THEN LEFT($4, 120)
+          ELSE title
+        END
+      WHERE id = $1 AND user_id = $2;
+    `,
+    [safeThreadId, userId, safeCreatedAt, safeText, safeRole],
+  );
+  return mapSocraticChatMessage(rows[0]);
+};
+
+export const listSocraticChatMessages = async (userId, threadId, limit = 200) => {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 200));
+  const safeThreadId = String(threadId || "").trim();
+  const { rows } = await getPool().query(
+    `
+      SELECT id, user_id, thread_id, role, content, created_at
+      FROM (
+        SELECT id, user_id, thread_id, role, content, created_at
+        FROM socratic_chat_messages
+        WHERE user_id = $1 AND thread_id = $2
+        ORDER BY created_at DESC
+        LIMIT $3
+      ) recent
+      ORDER BY created_at ASC;
+    `,
+    [userId, safeThreadId, safeLimit],
+  );
+  return rows.map(mapSocraticChatMessage);
 };

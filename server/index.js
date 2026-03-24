@@ -3,7 +3,11 @@ import multer from "multer";
 import { Buffer } from "node:buffer";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+const pdfParseModule = require("pdf-parse");
+const legacyPdfParse = typeof pdfParseModule === "function"
+  ? pdfParseModule
+  : (typeof pdfParseModule?.default === "function" ? pdfParseModule.default : null);
+const PdfParseCtor = typeof pdfParseModule?.PDFParse === "function" ? pdfParseModule.PDFParse : null;
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -104,6 +108,78 @@ const imageUpload = multer({
     fileSize: 8 * 1024 * 1024,
   },
 });
+
+const extractTextFromPdfBuffer = async (buffer) => {
+  if (legacyPdfParse) {
+    const parsed = await legacyPdfParse(buffer);
+    return String(parsed?.text || "").trim();
+  }
+
+  if (PdfParseCtor) {
+    const parser = new PdfParseCtor({ data: buffer });
+    try {
+      const parsed = await parser.getText();
+      return String(parsed?.text || "").trim();
+    } finally {
+      if (typeof parser.destroy === "function") {
+        await Promise.resolve(parser.destroy()).catch(() => {});
+      }
+    }
+  }
+
+  throw new Error("No compatible pdf-parse API found.");
+};
+const MAX_PDF_IMAGES_PER_BLOB = 4;
+const MAX_RETRIEVED_SOURCE_IMAGES = 8;
+const extractImagesFromPdfBuffer = async (buffer) => {
+  if (!PdfParseCtor || !buffer) return [];
+
+  const parser = new PdfParseCtor({ data: buffer });
+  try {
+    // Prefer embedded image extraction first.
+    const extracted = await parser.getImage({
+      first: 4,
+      imageThreshold: 0,
+      imageDataUrl: false,
+      imageBuffer: true,
+    });
+
+    const images = [];
+    const pages = Array.isArray(extracted?.pages) ? extracted.pages : [];
+    for (const page of pages) {
+      const pageNumber = Number(page?.page || page?.pageNumber || 0) || null;
+      const pageImages = Array.isArray(page?.images) ? page.images : [];
+      for (const img of pageImages) {
+        const data = img?.data;
+        if (!data) continue;
+        const bufferData = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        const mimeType = String(img?.type || img?.mimeType || "image/png");
+        images.push({ buffer: bufferData, mimeType, pageNumber });
+        if (images.length >= MAX_PDF_IMAGES_PER_BLOB) return images;
+      }
+    }
+
+    if (images.length > 0) return images;
+
+    // Fallback: render first page screenshot if no embedded images were found.
+    const screenshot = await parser.getScreenshot({
+      first: 1,
+      imageDataUrl: false,
+      imageBuffer: true,
+    });
+    const shotPage = Array.isArray(screenshot?.pages) ? screenshot.pages[0] : null;
+    if (shotPage?.data) {
+      const bufferData = Buffer.isBuffer(shotPage.data) ? shotPage.data : Buffer.from(shotPage.data);
+      return [{ buffer: bufferData, mimeType: "image/png", pageNumber: 1 }];
+    }
+
+    return [];
+  } finally {
+    if (typeof parser.destroy === "function") {
+      await Promise.resolve(parser.destroy()).catch(() => {});
+    }
+  }
+};
 const MIN_PROBLEM_COUNT = 1;
 const MAX_PROBLEM_COUNT = 60;
 const MAX_ERROR_MISTAKES = 10;
@@ -118,6 +194,20 @@ const MAX_SUGGESTED_FIX_LENGTH = 260;
 const SESSION_COOKIE_NAME = "stepwise_session";
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+const loadNotebookSubjectOrRespond = async (request, response) => {
+  const subjectId = String(request.params?.subjectId || "").trim();
+  if (!subjectId) {
+    response.status(400).json({ message: "Notebook subject id is required." });
+    return null;
+  }
+  const subject = await getNotebookSubject(request.user.id, subjectId);
+  if (!subject) {
+    response.status(404).json({ message: "Notebook not found." });
+    return null;
+  }
+  return subject;
+};
 
 const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
 const readEnv = (name) => String(globalThis.process?.env?.[name] || "").trim();
@@ -321,7 +411,7 @@ const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperatu
       },
       body: JSON.stringify({
         temperature,
-        max_tokens: maxTokens,
+        max_completion_tokens: maxTokens,
         messages,
       }),
     },
@@ -1715,6 +1805,8 @@ app.delete("/api/notebooks/subjects/:subjectId", requireAuth, async (request, re
 
 app.get("/api/notebooks/:subjectId/notes", requireAuth, async (request, response) => {
   try {
+    const subject = await loadNotebookSubjectOrRespond(request, response);
+    if (!subject) return;
     const notes = await listNotebookNotes(request.user.id, request.params.subjectId);
     response.json(notes.map((n) => ({
       id: n.id, title: n.title, content: n.content, tags: n.tags,
@@ -1736,26 +1828,26 @@ app.post("/api/notebooks/:subjectId/notes", requireAuth, async (request, respons
     return;
   }
   try {
+    const subject = await loadNotebookSubjectOrRespond(request, response);
+    if (!subject) return;
     const note = await insertNotebookNote(request.user.id, request.params.subjectId, { title, content, tags, sourceType: "text" });
     
     // Index in background
-    getNotebookSubject(request.user.id, request.params.subjectId)
-      .then((subject) => {
-        if (subject) {
-          indexNoteChunks({
-            userId: request.user.id,
-            noteId: note.id,
-            subjectId: request.params.subjectId,
-            subjectName: subject.name,
-            title: note.title,
-            content: note.content,
-            sourceType: note.sourceType,
-            tags: note.tags,
-            updatedAt: note.updatedAt,
-            blobName: note.blobName || "",
-            contentType: note.contentType || "",
-          });
-        }
+    Promise.resolve()
+      .then(() => {
+        indexNoteChunks({
+          userId: request.user.id,
+          noteId: note.id,
+          subjectId: request.params.subjectId,
+          subjectName: subject.name,
+          title: note.title,
+          content: note.content,
+          sourceType: note.sourceType,
+          tags: note.tags,
+          updatedAt: note.updatedAt,
+          blobName: note.blobName || "",
+          contentType: note.contentType || "",
+        });
       })
       .catch((e) => console.error("Failed to index note:", e));
 
@@ -1827,6 +1919,8 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
   if (!file) { response.status(400).json({ message: "PDF file is required." }); return; }
   if (file.mimetype !== "application/pdf") { response.status(400).json({ message: "Only PDF files are supported." }); return; }
   try {
+    const subject = await loadNotebookSubjectOrRespond(request, response);
+    if (!subject) return;
     const tempNoteId = `note-${Date.now()}`;
     const blobResult = await uploadNoteFileToBlob({
       userId: request.user.id, subjectId: request.params.subjectId,
@@ -1836,8 +1930,7 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
     let extractedText = String(request.body?.extractedText || "").trim();
     if (!extractedText || extractedText === "No readable text was found in this PDF.") {
       try {
-        const parsed = await pdfParse(file.buffer);
-        extractedText = String(parsed.text || "").trim();
+        extractedText = await extractTextFromPdfBuffer(file.buffer);
       } catch (err) {
         console.error("Fallback PDF extraction failed:", err.message);
       }
@@ -1852,9 +1945,9 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
     });
 
     // Index in background
-    getNotebookSubject(request.user.id, request.params.subjectId)
-      .then((subject) => {
-        if (subject && extractedText) {
+    Promise.resolve()
+      .then(() => {
+        if (extractedText) {
           indexNoteChunks({
             userId: request.user.id,
             noteId: note.id,
@@ -1890,6 +1983,8 @@ app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.sin
   const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
   if (!allowedTypes.has(file.mimetype)) { response.status(400).json({ message: "Only PNG, JPEG, and WEBP images are supported." }); return; }
   try {
+    const subject = await loadNotebookSubjectOrRespond(request, response);
+    if (!subject) return;
     const tempNoteId = `note-${Date.now()}`;
     const blobResult = await uploadNoteFileToBlob({
       userId: request.user.id, subjectId: request.params.subjectId,
@@ -1910,9 +2005,9 @@ app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.sin
     });
 
     // Index in background
-    getNotebookSubject(request.user.id, request.params.subjectId)
-      .then((subject) => {
-        if (subject && extractedText) {
+    Promise.resolve()
+      .then(() => {
+        if (extractedText) {
           indexNoteChunks({
             userId: request.user.id,
             noteId: note.id,
@@ -2080,27 +2175,41 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
       // Deduplicate by blobName to avoid fetching the same image multiple times
       const seenBlobs = new Set();
       for (const res of searchResults) {
+        if (retrievedImages.length >= MAX_RETRIEVED_SOURCE_IMAGES) break;
         const blob = res.blobName;
         const ct = res.sourceContentType || "";
         if (!blob || seenBlobs.has(blob)) continue;
         seenBlobs.add(blob);
 
-        // Only fetch image blobs (not PDFs yet — PDF page rendering can be added later)
-        const isImage = ct.startsWith("image/");
-        if (!isImage) continue;
-
         try {
           const download = await downloadNoteFileBufferFromBlob(blob);
-          if (download?.buffer) {
-            const mimeType = download.contentType || ct || "image/png";
+          if (!download?.buffer) continue;
+          const mimeType = download.contentType || ct || "application/octet-stream";
+          const isImage = String(mimeType).startsWith("image/");
+          const isPdf = String(mimeType).includes("pdf");
+
+          if (isImage) {
             retrievedImages.push({
               base64: download.buffer.toString("base64"),
               mimeType,
               title: res.title,
             });
+            continue;
+          }
+
+          if (isPdf) {
+            const pdfImages = await extractImagesFromPdfBuffer(download.buffer).catch(() => []);
+            for (const pdfImage of pdfImages) {
+              retrievedImages.push({
+                base64: pdfImage.buffer.toString("base64"),
+                mimeType: pdfImage.mimeType || "image/png",
+                title: pdfImage.pageNumber ? `${res.title} (page ${pdfImage.pageNumber})` : res.title,
+              });
+              if (retrievedImages.length >= MAX_RETRIEVED_SOURCE_IMAGES) break;
+            }
           }
         } catch (err) {
-          console.warn(`Failed to download note image blob '${blob}':`, err.message);
+          console.warn(`Failed to download or parse note blob '${blob}':`, err.message);
         }
       }
       console.log(`Multimodal RAG: retrieved ${retrievedImages.length} source image(s) for ${searchResults.length} search result(s)`);

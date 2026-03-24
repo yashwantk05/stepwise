@@ -313,7 +313,13 @@ export const searchNotes = async (userId, query, subjectId = null, topK = 5) => 
     const results = [];
     
     for await (const result of searchResults.results) {
-      results.push(result.document);
+      results.push({
+        ...result.document,
+        searchScore:
+          Number(result?.score)
+          || Number(result?.["@search.score"])
+          || 0,
+      });
     }
     
     return results;

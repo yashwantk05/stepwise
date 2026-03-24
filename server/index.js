@@ -76,7 +76,6 @@ import {
   updateNotebookNote,
   removeNotebookNote,
   listAllNotebookNotesForUser,
-  listNotebookNoteBlobNames,
 } from "./db.js";
 import {
   initSearchIndex,
@@ -129,8 +128,16 @@ const extractTextFromPdfBuffer = async (buffer) => {
 
   throw new Error("No compatible pdf-parse API found.");
 };
-const MAX_PDF_IMAGES_PER_BLOB = 4;
-const MAX_RETRIEVED_SOURCE_IMAGES = 8;
+const MAX_PDF_IMAGES_PER_BLOB = 1;
+const MAX_RETRIEVED_SOURCE_IMAGES = 3;
+const MAX_RETRIEVED_SOURCE_BLOBS = 2;
+const VISUAL_QUERY_HINT_REGEX =
+  /\b(image|photo|diagram|graph|figure|chart|table|draw|drawing|shown|see|visual|look at|looks like)\b/i;
+const QR_OR_BARCODE_HINT_REGEX =
+  /\b(qr|barcode|scan code|scan this|upi|paytm|gpay|whatsapp web|scan to pay)\b/i;
+const containsQrLikeHints = (value) => QR_OR_BARCODE_HINT_REGEX.test(String(value || ""));
+const shouldUseRetrievedSourceImages = (query, userImages) =>
+  userImages.length === 0 && VISUAL_QUERY_HINT_REGEX.test(String(query || ""));
 const extractImagesFromPdfBuffer = async (buffer) => {
   if (!PdfParseCtor || !buffer) return [];
 
@@ -2169,50 +2176,80 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
         searchResults.map((res, i) => `[${i + 1}] Title: ${res.title}\nContent snippet: ${res.chunkText}`).join("\n\n");
     }
 
+    const shouldRetrieveSourceImages = shouldUseRetrievedSourceImages(searchQuery, images);
+
     // Fetch source images for multimodal context (image notes + PDF pages)
     const retrievedImages = [];
-    if (searchResults && searchResults.length > 0) {
-      // Deduplicate by blobName to avoid fetching the same image multiple times
-      const seenBlobs = new Set();
+    if (shouldRetrieveSourceImages && searchResults && searchResults.length > 0) {
+      // Deduplicate by blob and keep most relevant chunk metadata.
+      const byBlob = new Map();
       for (const res of searchResults) {
-        if (retrievedImages.length >= MAX_RETRIEVED_SOURCE_IMAGES) break;
+        const blob = String(res.blobName || "").trim();
+        if (!blob) continue;
+        const prev = byBlob.get(blob);
+        const nextScore = Number(res.searchScore || 0);
+        const prevScore = Number(prev?.searchScore || 0);
+        if (!prev || nextScore > prevScore) {
+          byBlob.set(blob, res);
+        }
+      }
+
+      const candidates = Array.from(byBlob.values())
+        .filter((res) => {
+          const hintText = `${res.title || ""}\n${res.chunkText || ""}`;
+          return !containsQrLikeHints(hintText);
+        })
+        .sort((a, b) => Number(b.searchScore || 0) - Number(a.searchScore || 0))
+        .slice(0, MAX_RETRIEVED_SOURCE_BLOBS);
+
+      const retrievedByBlob = await Promise.all(candidates.map(async (res) => {
         const blob = res.blobName;
         const ct = res.sourceContentType || "";
-        if (!blob || seenBlobs.has(blob)) continue;
-        seenBlobs.add(blob);
-
         try {
           const download = await downloadNoteFileBufferFromBlob(blob);
-          if (!download?.buffer) continue;
+          if (!download?.buffer) return [];
           const mimeType = download.contentType || ct || "application/octet-stream";
           const isImage = String(mimeType).startsWith("image/");
           const isPdf = String(mimeType).includes("pdf");
 
           if (isImage) {
-            retrievedImages.push({
+            if (containsQrLikeHints(res.title) || containsQrLikeHints(res.chunkText)) return [];
+            return [{
               base64: download.buffer.toString("base64"),
               mimeType,
               title: res.title,
-            });
-            continue;
+            }];
           }
 
           if (isPdf) {
             const pdfImages = await extractImagesFromPdfBuffer(download.buffer).catch(() => []);
-            for (const pdfImage of pdfImages) {
-              retrievedImages.push({
+            return pdfImages
+              .slice(0, MAX_PDF_IMAGES_PER_BLOB)
+              .map((pdfImage) => ({
                 base64: pdfImage.buffer.toString("base64"),
                 mimeType: pdfImage.mimeType || "image/png",
                 title: pdfImage.pageNumber ? `${res.title} (page ${pdfImage.pageNumber})` : res.title,
-              });
-              if (retrievedImages.length >= MAX_RETRIEVED_SOURCE_IMAGES) break;
-            }
+              }));
           }
+
+          return [];
         } catch (err) {
           console.warn(`Failed to download or parse note blob '${blob}':`, err.message);
+          return [];
         }
+      }));
+
+      for (const batch of retrievedByBlob) {
+        for (const img of batch) {
+          if (retrievedImages.length >= MAX_RETRIEVED_SOURCE_IMAGES) break;
+          retrievedImages.push(img);
+        }
+        if (retrievedImages.length >= MAX_RETRIEVED_SOURCE_IMAGES) break;
       }
-      console.log(`Multimodal RAG: retrieved ${retrievedImages.length} source image(s) for ${searchResults.length} search result(s)`);
+
+      console.log(
+        `Multimodal RAG: retrieved ${retrievedImages.length} source image(s) from ${candidates.length} candidate blob(s) for ${searchResults.length} search result(s)`,
+      );
     }
 
     const systemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.

@@ -410,7 +410,59 @@ const buildUnreadableHint = (rawContext) => {
   return "I couldn't read the step. Please rewrite it clearly and show the full equation or expression.";
 };
 
-const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperature = 0.3 }) => {
+const isAzureDebugEnabled = () => {
+  const flag = readEnv("STEPWISE_AZURE_DEBUG").toLowerCase();
+  return flag === "true" || flag === "1" || flag === "yes";
+};
+
+const summarizeMessagesForDebug = (messages) => {
+  if (!Array.isArray(messages)) {
+    return { messageCount: 0, estimatedTextChars: 0, imageParts: 0, audioParts: 0 };
+  }
+  let estimatedTextChars = 0;
+  let imageParts = 0;
+  let audioParts = 0;
+
+  for (const message of messages) {
+    const content = message?.content;
+    if (typeof content === "string") {
+      estimatedTextChars += content.length;
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      const type = String(part?.type || "");
+      if (type === "text") {
+        estimatedTextChars += String(part?.text || "").length;
+      } else if (type === "image_url") {
+        imageParts += 1;
+      } else if (type === "input_audio") {
+        audioParts += 1;
+      }
+    }
+  }
+
+  return {
+    messageCount: messages.length,
+    estimatedTextChars,
+    imageParts,
+    audioParts,
+  };
+};
+
+const getAzureRequestIdFromHeaders = (headers) =>
+  headers?.get("x-request-id") ||
+  headers?.get("apim-request-id") ||
+  headers?.get("x-ms-request-id") ||
+  "";
+
+const requestAzureChatCompletion = async ({
+  messages,
+  maxTokens = 200,
+  temperature = 0.3,
+  debugTag = "general",
+  debugMeta = null,
+}) => {
   const { endpoint, apiKey, apiVersion, deployment } = getAzureConfig();
   const response = await fetch(
     `${endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`,
@@ -428,13 +480,53 @@ const requestAzureChatCompletion = async ({ messages, maxTokens = 200, temperatu
     },
   );
 
+  const requestId = getAzureRequestIdFromHeaders(response.headers);
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
+    console.error("Azure OpenAI request failed", {
+      debugTag,
+      status: response.status,
+      requestId,
+      detail: String(detail || "").slice(0, 600),
+      deployment,
+      apiVersion,
+      ...summarizeMessagesForDebug(messages),
+      ...(debugMeta && typeof debugMeta === "object" ? debugMeta : {}),
+    });
     throw new Error(`Azure OpenAI request failed (${response.status}). ${detail}`.trim());
   }
 
   const payload = await response.json();
-  return payload?.choices?.[0]?.message?.content?.trim() || "No hint available yet.";
+  const choice = payload?.choices?.[0] || {};
+  const rawContent = choice?.message?.content;
+  const content = typeof rawContent === "string" ? rawContent.trim() : "";
+  if (content) {
+    return content;
+  }
+
+  const emptyMeta = {
+    debugTag,
+    requestId,
+    status: response.status,
+    deployment,
+    apiVersion,
+    finishReason: choice?.finish_reason || "unknown",
+    refusal: choice?.message?.refusal || null,
+    contentFilterResults: choice?.content_filter_results || payload?.prompt_filter_results || null,
+    usage: payload?.usage || null,
+    ...summarizeMessagesForDebug(messages),
+    ...(debugMeta && typeof debugMeta === "object" ? debugMeta : {}),
+  };
+
+  console.warn("Azure OpenAI returned empty message content", emptyMeta);
+  if (isAzureDebugEnabled()) {
+    console.log("Azure empty payload snapshot", {
+      ...emptyMeta,
+      payloadKeys: Object.keys(payload || {}),
+      choiceKeys: Object.keys(choice || {}),
+    });
+  }
+  return "No hint available yet.";
 };
 
 const analyzeProblemContextWithAzure = async (
@@ -2257,6 +2349,23 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
       );
     }
 
+    if (isAzureDebugEnabled()) {
+      console.log("Socratic request context", {
+        userId: request.user?.id || "unknown",
+        threadId: threadId || null,
+        messageChars: message.length,
+        historyCount: history.length,
+        classLevel,
+        searchQueryChars: searchQuery.length,
+        searchResultCount: searchResults.length,
+        noteContextChars: noteContext.length,
+        shouldRetrieveSourceImages,
+        uploadedImageCount: images.length,
+        retrievedImageCount: retrievedImages.length,
+        hasAudio: Boolean(audioBase64),
+      });
+    }
+
     const systemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.
 Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
 Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
@@ -2331,7 +2440,18 @@ ${noteContext}`;
     const replyText = await requestAzureChatCompletion({
       messages: promptMessages, 
       maxTokens: 180, 
-      temperature: 0.5 
+      temperature: 0.5,
+      debugTag: "socratic_chat",
+      debugMeta: {
+        userId: request.user?.id || "unknown",
+        threadId: threadId || null,
+        historyCount: history.length,
+        searchResultCount: searchResults.length,
+        noteContextChars: noteContext.length,
+        uploadedImageCount: images.length,
+        retrievedImageCount: retrievedImages.length,
+        hasAudio: Boolean(audioBase64),
+      },
     });
 
     if (dbReady && threadId) {

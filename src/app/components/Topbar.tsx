@@ -1,11 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Flame, Settings } from 'lucide-react';
+import { Flame, Settings, Square } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
   onSignOut: () => void;
   onDeleteAccount: () => void;
   onOpenSettings: () => void;
+  onStopAudio: () => void;
+  showAudioControl: boolean;
+  isAudioPlaying: boolean;
   streakCount: number;
   notificationCount: number;
 }
@@ -15,6 +18,9 @@ export function Topbar({
   onSignOut,
   onDeleteAccount,
   onOpenSettings,
+  onStopAudio,
+  showAudioControl,
+  isAudioPlaying,
   streakCount,
   notificationCount,
 }: TopbarProps) {
@@ -63,6 +69,19 @@ export function Topbar({
       </div>
 
       <div className="topbar-actions">
+        {showAudioControl ? (
+          <button
+            type="button"
+            className={`topbar-audio-button ${isAudioPlaying ? 'is-playing' : ''}`}
+            onClick={onStopAudio}
+            title="Stop audio narration"
+            aria-label="Stop audio narration"
+          >
+            <Square size={16} />
+            <span>Stop Audio</span>
+          </button>
+        ) : null}
+
         <div className="topbar-streak-pill" title="Learning streak">
           <Flame size={18} />
           <span>{streakCount}</span>

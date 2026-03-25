@@ -1,13 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import "../styles/index.css";
+import "../styles/fonts.css";
 import "../styles/app.css";
 import {
+  DEFAULT_USER_SETTINGS,
   getCurrentUser,
+  getUserSettings,
   signOut,
   requestAccountDeletion,
   getLearningStreakSummary,
   recordLearningActivity,
+  type UserSettings,
 } from './services/storage';
+import {
+  applyAccessibilitySettings,
+  extractPageSpeechText,
+  speakWithAzure,
+  stopAccessibilitySpeech,
+  subscribeAccessibilitySpeechState,
+} from './services/accessibility';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { LoginPage } from './pages/LoginPage';
@@ -44,6 +55,36 @@ function App() {
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [streakCount, setStreakCount] = useState(0);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
+  const [isAccessibilityAudioPlaying, setIsAccessibilityAudioPlaying] = useState(false);
+  const [suppressedNarrationRouteKey, setSuppressedNarrationRouteKey] = useState<string | null>(null);
+  const narrationRequestId = useRef(0);
+
+  const getRouteNarrationKey = useCallback((currentRoute: Route) => {
+    switch (currentRoute.type) {
+      case 'dashboard':
+      case 'whiteboard':
+      case 'notes':
+      case 'weak-areas':
+      case 'progress-analytics':
+      case 'settings':
+        return currentRoute.type;
+      case 'socratic-tutor':
+        return `socratic-tutor:${JSON.stringify(currentRoute.context || {})}`;
+      case 'study-tool':
+        return `study-tool:${currentRoute.tool}:${currentRoute.subjectId || ''}`;
+      case 'subject':
+        return `subject:${currentRoute.subjectId}`;
+      case 'assignment':
+        return `assignment:${currentRoute.subjectId}:${currentRoute.assignmentId}`;
+      case 'problem':
+        return `problem:${currentRoute.subjectId}:${currentRoute.assignmentId}:${currentRoute.problemIndex}`;
+      default:
+        return 'unknown';
+    }
+  }, []);
+
+  const currentRouteNarrationKey = getRouteNarrationKey(route);
 
   useEffect(() => {
     getCurrentUser()
@@ -57,6 +98,12 @@ function App() {
         setAuthReady(true);
       });
   }, []);
+
+  useEffect(() => {
+    const nextSettings = getUserSettings(user?.id);
+    setUserSettings(nextSettings);
+    applyAccessibilitySettings(nextSettings);
+  }, [user?.id]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
@@ -86,6 +133,64 @@ function App() {
     return () => window.clearInterval(intervalId);
   }, []);
 
+  useEffect(() => {
+    applyAccessibilitySettings(userSettings);
+  }, [userSettings]);
+
+  useEffect(() => subscribeAccessibilitySpeechState(setIsAccessibilityAudioPlaying), []);
+
+  useEffect(() => {
+    narrationRequestId.current += 1;
+    const requestId = narrationRequestId.current;
+
+    if (
+      !authReady ||
+      !user ||
+      !userSettings.textToSpeechEnabled
+    ) {
+      stopAccessibilitySpeech();
+      return;
+    }
+
+    if (suppressedNarrationRouteKey === currentRouteNarrationKey) {
+      stopAccessibilitySpeech();
+      return;
+    }
+
+    let frameOne = 0;
+    let frameTwo = 0;
+    let timer = 0;
+
+    frameOne = window.requestAnimationFrame(() => {
+      frameTwo = window.requestAnimationFrame(() => {
+        timer = window.setTimeout(() => {
+          if (requestId !== narrationRequestId.current) return;
+
+          const text = extractPageSpeechText();
+          if (!text) return;
+
+          void speakWithAzure(text, userSettings).catch((error) => {
+            console.error("Accessibility speech playback failed:", error);
+          });
+        }, 250);
+      });
+    });
+
+    return () => {
+      narrationRequestId.current += 1;
+      window.cancelAnimationFrame(frameOne);
+      window.cancelAnimationFrame(frameTwo);
+      window.clearTimeout(timer);
+      stopAccessibilitySpeech();
+    };
+  }, [authReady, currentRouteNarrationKey, route, suppressedNarrationRouteKey, user, userSettings]);
+
+  useEffect(() => {
+    if (suppressedNarrationRouteKey && suppressedNarrationRouteKey !== currentRouteNarrationKey) {
+      setSuppressedNarrationRouteKey(null);
+    }
+  }, [currentRouteNarrationKey, suppressedNarrationRouteKey]);
+
   const handleSignOut = useCallback(async () => {
     await signOut();
     setUser(null);
@@ -100,6 +205,17 @@ function App() {
     await requestAccountDeletion();
     setUser(null);
   }, []);
+
+  const handleSettingsChange = useCallback((nextSettings: UserSettings) => {
+    setUserSettings(nextSettings);
+    applyAccessibilitySettings(nextSettings);
+  }, []);
+
+  const handleStopAccessibilityAudio = useCallback(() => {
+    narrationRequestId.current += 1;
+    setSuppressedNarrationRouteKey(getRouteNarrationKey(route));
+    stopAccessibilitySpeech();
+  }, [getRouteNarrationKey, route]);
 
   const navigate = useCallback((page: string) => {
     if (page === 'dashboard') {
@@ -182,7 +298,7 @@ function App() {
     if (route.type === 'notes') return 'notes';
     if (route.type === 'weak-areas') return 'weak-areas';
     if (route.type === 'progress-analytics') return 'progress-analytics';
-    if (route.type === 'settings') return 'dashboard';
+    if (route.type === 'settings') return 'settings';
     if (route.type === 'socratic-tutor') return 'socratic-tutor';
     if (route.type === 'study-tool') return route.tool;
     return 'whiteboard';
@@ -203,6 +319,9 @@ function App() {
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
           onOpenSettings={() => setRoute({ type: 'settings' })}
+          onStopAudio={handleStopAccessibilityAudio}
+          showAudioControl={userSettings.textToSpeechEnabled}
+          isAudioPlaying={isAccessibilityAudioPlaying}
           streakCount={streakCount}
           notificationCount={notificationCount}
         />
@@ -227,7 +346,13 @@ function App() {
 
         {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
 
-        {route.type === 'settings' && <SettingsPage user={user} />}
+        {route.type === 'settings' && (
+          <SettingsPage
+            user={user}
+            settings={userSettings}
+            onSettingsChange={handleSettingsChange}
+          />
+        )}
 
         {route.type === 'socratic-tutor' && (
           <div className="socratic-page-shell">

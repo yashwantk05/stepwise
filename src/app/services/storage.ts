@@ -17,6 +17,15 @@ interface User {
 
 export interface UserSettings {
   classLevel: number | null;
+  textToSpeechEnabled: boolean;
+  speechRate: number;
+  dyslexiaFriendlyFont: boolean;
+  highContrastMode: boolean;
+  largeUiMode: boolean;
+  reduceMotion: boolean;
+  focusHighlight: boolean;
+  fontScale: number;
+  colorTheme: "default" | "dark";
 }
 
 interface Subject {
@@ -267,6 +276,42 @@ const parseClassLevel = (value: unknown): number | null => {
   return null;
 };
 
+const parseBoolean = (value: unknown, fallback = false) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+};
+
+const clampNumber = (value: unknown, minimum: number, maximum: number, fallback: number) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(maximum, Math.max(minimum, numeric));
+};
+
+const parseColorTheme = (value: unknown): UserSettings["colorTheme"] => {
+  if (value === "default" || value === "dark") {
+    return value;
+  }
+  return "default";
+};
+
+export const DEFAULT_USER_SETTINGS: UserSettings = {
+  classLevel: null,
+  textToSpeechEnabled: false,
+  speechRate: 50,
+  dyslexiaFriendlyFont: false,
+  highContrastMode: false,
+  largeUiMode: false,
+  reduceMotion: false,
+  focusHighlight: true,
+  fontScale: 50,
+  colorTheme: "default",
+};
+
 const getUserSettingsStorageKey = (userId?: string) =>
   `${USER_SETTINGS_KEY_PREFIX}:${String(userId || cachedUser?.id || "anonymous")}`;
 
@@ -275,6 +320,18 @@ export const getUserSettings = (userId?: string): UserSettings => {
   const stored = readJson<Partial<UserSettings>>(key, {});
   return {
     classLevel: parseClassLevel(stored.classLevel),
+    textToSpeechEnabled: parseBoolean(stored.textToSpeechEnabled, DEFAULT_USER_SETTINGS.textToSpeechEnabled),
+    speechRate: clampNumber(stored.speechRate, 0, 100, DEFAULT_USER_SETTINGS.speechRate),
+    dyslexiaFriendlyFont: parseBoolean(
+      stored.dyslexiaFriendlyFont,
+      DEFAULT_USER_SETTINGS.dyslexiaFriendlyFont,
+    ),
+    highContrastMode: parseBoolean(stored.highContrastMode, DEFAULT_USER_SETTINGS.highContrastMode),
+    largeUiMode: parseBoolean(stored.largeUiMode, DEFAULT_USER_SETTINGS.largeUiMode),
+    reduceMotion: parseBoolean(stored.reduceMotion, DEFAULT_USER_SETTINGS.reduceMotion),
+    focusHighlight: parseBoolean(stored.focusHighlight, DEFAULT_USER_SETTINGS.focusHighlight),
+    fontScale: clampNumber(stored.fontScale, 0, 100, DEFAULT_USER_SETTINGS.fontScale),
+    colorTheme: parseColorTheme(stored.colorTheme),
   };
 };
 
@@ -286,9 +343,48 @@ export const updateUserSettings = (
   const next: UserSettings = {
     classLevel:
       updates.classLevel === undefined ? current.classLevel : parseClassLevel(updates.classLevel),
+    textToSpeechEnabled:
+      updates.textToSpeechEnabled === undefined
+        ? current.textToSpeechEnabled
+        : parseBoolean(updates.textToSpeechEnabled, DEFAULT_USER_SETTINGS.textToSpeechEnabled),
+    speechRate:
+      updates.speechRate === undefined
+        ? current.speechRate
+        : clampNumber(updates.speechRate, 0, 100, DEFAULT_USER_SETTINGS.speechRate),
+    dyslexiaFriendlyFont:
+      updates.dyslexiaFriendlyFont === undefined
+        ? current.dyslexiaFriendlyFont
+        : parseBoolean(updates.dyslexiaFriendlyFont, DEFAULT_USER_SETTINGS.dyslexiaFriendlyFont),
+    highContrastMode:
+      updates.highContrastMode === undefined
+        ? current.highContrastMode
+        : parseBoolean(updates.highContrastMode, DEFAULT_USER_SETTINGS.highContrastMode),
+    largeUiMode:
+      updates.largeUiMode === undefined
+        ? current.largeUiMode
+        : parseBoolean(updates.largeUiMode, DEFAULT_USER_SETTINGS.largeUiMode),
+    reduceMotion:
+      updates.reduceMotion === undefined
+        ? current.reduceMotion
+        : parseBoolean(updates.reduceMotion, DEFAULT_USER_SETTINGS.reduceMotion),
+    focusHighlight:
+      updates.focusHighlight === undefined
+        ? current.focusHighlight
+        : parseBoolean(updates.focusHighlight, DEFAULT_USER_SETTINGS.focusHighlight),
+    fontScale:
+      updates.fontScale === undefined
+        ? current.fontScale
+        : clampNumber(updates.fontScale, 0, 100, DEFAULT_USER_SETTINGS.fontScale),
+    colorTheme:
+      updates.colorTheme === undefined ? current.colorTheme : parseColorTheme(updates.colorTheme),
   };
   writeJson(getUserSettingsStorageKey(userId), next);
   return next;
+};
+
+export const resetUserSettings = (userId?: string): UserSettings => {
+  writeJson(getUserSettingsStorageKey(userId), DEFAULT_USER_SETTINGS);
+  return DEFAULT_USER_SETTINGS;
 };
 
 export const getCurrentUser = async (): Promise<User | null> => {

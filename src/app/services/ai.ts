@@ -1,5 +1,15 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
-const normalizeFlag = (value) => String(value || "").trim().toLowerCase();
+const normalizeFlag = (value: unknown) => String(value || "").trim().toLowerCase();
+
+type AnalyzeMode = "explain" | "calculate";
+
+interface AnalyzeOptions {
+  assignmentId?: string;
+  problemIndex?: number;
+  mode?: AnalyzeMode;
+  hintLevel?: number;
+  previousHints?: string[];
+}
 
 const canUseDevBypass = () => {
   const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
@@ -22,7 +32,7 @@ const buildDevHeaders = () => {
 export const isDebugImagesEnabled = () =>
   ["true", "1", "yes"].includes(normalizeFlag(import.meta.env.VITE_DEBUG_AI_IMAGES));
 
-export const debugEchoImage = async (blob, label) => {
+export const debugEchoImage = async (blob: Blob, label: string) => {
   const formData = new FormData();
   formData.append("file", blob, `${label || "debug"}.png`);
 
@@ -33,16 +43,14 @@ export const debugEchoImage = async (blob, label) => {
     body: formData,
   });
 
-  // Intentionally ignore the body; the goal is a DevTools Network entry with an image Preview.
   if (!response.ok) {
     throw new Error("Debug echo failed.");
   }
 };
 
-export async function analyzeDrawing(
-  blob,
-  { assignmentId, problemIndex, mode, hintLevel, previousHints} = {},
-) {
+export async function analyzeDrawing(blob: Blob, options: AnalyzeOptions = {}) {
+  const { assignmentId, problemIndex, mode, hintLevel, previousHints } = options;
+
   if (isDebugImagesEnabled()) {
     const label = `gpt-analyze-${String(mode || "hint").toLowerCase()}-drawing`;
     void debugEchoImage(blob, label).catch(() => {});
@@ -65,8 +73,8 @@ export async function analyzeDrawing(
   if (Array.isArray(previousHints) && previousHints.length > 0) {
     formData.append("previousHints", JSON.stringify(previousHints));
   }
-  const endpoint = import.meta.env.VITE_AI_ANALYZE_URL || `${API_BASE}/ai/analyze`;
 
+  const endpoint = import.meta.env.VITE_AI_ANALYZE_URL || `${API_BASE}/ai/analyze`;
   const response = await fetch(endpoint, {
     method: "POST",
     credentials: "include",

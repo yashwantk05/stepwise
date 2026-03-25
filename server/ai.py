@@ -71,7 +71,7 @@ Rules:
     response = client.chat.completions.create(
         model=AZURE_OPENAI_MODEL,
         temperature=0.2,
-        max_tokens=350,
+        max_completion_tokens=350,
         messages=[
             {
                 "role": "user",
@@ -138,7 +138,7 @@ Correct next line:
     response = client.chat.completions.create(
         model=AZURE_OPENAI_MODEL,
         temperature=0.3,
-        max_tokens=220,
+        max_completion_tokens=220,
         messages=[{"role": "user", "content": content}],
     )
     return (response.choices[0].message.content or "").strip()

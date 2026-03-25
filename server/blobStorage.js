@@ -218,3 +218,67 @@ export const downloadProblemImageBufferFromBlob = async (blobName) => {
     contentLength: Number(response.contentLength || 0),
   };
 };
+
+// ── Notebook note file blobs ───────────────────────────
+
+const createNoteFileBlobName = (userId, subjectId, noteId, originalFileName, extension) => {
+  const safeUser = sanitize(userId, "user");
+  const safeSubject = sanitize(subjectId, "subject");
+  const safeNote = sanitize(noteId, "note");
+  const safeFile = sanitize(originalFileName, "file");
+  const ext = extension || "bin";
+  return `${safeUser}/notes/${safeSubject}/${safeNote}-${safeFile}.${ext}`;
+};
+
+export const uploadNoteFileToBlob = async ({
+  userId,
+  subjectId,
+  noteId,
+  fileName,
+  contentType,
+  buffer,
+}) => {
+  const container = await requireContainer();
+  const ext = contentType === "application/pdf" ? "pdf" : "png";
+  const blobName = createNoteFileBlobName(userId, subjectId, noteId, fileName, ext);
+  const blobClient = container.getBlockBlobClient(blobName);
+  await blobClient.uploadData(buffer, {
+    blobHTTPHeaders: { blobContentType: contentType },
+  });
+  return { blobName, fileName, contentType, size: buffer.length };
+};
+
+export const downloadNoteFileFromBlob = async (blobName) => {
+  const container = await requireContainer();
+  const blobClient = container.getBlobClient(blobName);
+  const exists = await blobClient.exists();
+  if (!exists) return null;
+
+  const response = await blobClient.download();
+  return {
+    stream: response.readableStreamBody,
+    contentType: response.contentType || "application/octet-stream",
+    contentLength: Number(response.contentLength || 0),
+  };
+};
+
+export const downloadNoteFileBufferFromBlob = async (blobName) => {
+  const container = await requireContainer();
+  const blobClient = container.getBlobClient(blobName);
+  const exists = await blobClient.exists();
+  if (!exists) return null;
+
+  const response = await blobClient.download();
+  const chunks = [];
+  if (!response.readableStreamBody) return null;
+
+  for await (const chunk of response.readableStreamBody) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  return {
+    buffer: Buffer.concat(chunks),
+    contentType: response.contentType || "application/octet-stream",
+    contentLength: Number(response.contentLength || 0),
+  };
+};

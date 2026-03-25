@@ -13,7 +13,7 @@ import {
   Sparkles,
   Star,
 } from 'lucide-react';
-import { listNotes, listSubjects } from '../services/storage';
+import { getNotebookQuizSession, listNotes, listSubjects, updateNotebookQuizSession } from '../services/storage';
 import { generateStudyTool, type StudyToolType } from '../services/studyTools';
 
 interface StudyToolPageProps {
@@ -49,6 +49,49 @@ interface QuizRecord {
   difficulty: string;
 }
 
+interface StudyToolCacheRecord {
+  signature: string;
+  output: unknown;
+  savedAt: number;
+}
+
+const STUDY_TOOL_CACHE_PREFIX = 'study-tool-cache-v1';
+
+const buildStudyToolCacheKey = (tool: StudyToolType, subjectId: string) =>
+  `${STUDY_TOOL_CACHE_PREFIX}:${tool}:${subjectId}`;
+
+const buildNotesSignature = (notes: NoteRecord[]) =>
+  notes
+    .map((note) => `${note.id}:${note.title.length}:${note.content.length}`)
+    .sort()
+    .join('|');
+
+const readStudyToolCache = (tool: StudyToolType, subjectId: string): StudyToolCacheRecord | null => {
+  if (!subjectId) return null;
+  try {
+    const raw = localStorage.getItem(buildStudyToolCacheKey(tool, subjectId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StudyToolCacheRecord;
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeStudyToolCache = (
+  tool: StudyToolType,
+  subjectId: string,
+  cache: StudyToolCacheRecord,
+) => {
+  if (!subjectId) return;
+  try {
+    localStorage.setItem(buildStudyToolCacheKey(tool, subjectId), JSON.stringify(cache));
+  } catch {
+    // Ignore cache write failures (quota/private mode) and continue.
+  }
+};
+
 const toolConfig: Record<StudyToolType, { title: string; subtitle: string; icon: React.ReactNode }> = {
   flashcards: {
     title: 'Flashcards',
@@ -83,12 +126,18 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isCardFlipped, setIsCardFlipped] = useState(false);
   const [flashcardRatings, setFlashcardRatings] = useState<Record<number, 'know' | 'later' | 'difficult'>>({});
+  const [selectedFlashcardRating, setSelectedFlashcardRating] = useState<'know' | 'later' | 'difficult' | null>(null);
 
   const [quizIndex, setQuizIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
   const [submittedAnswers, setSubmittedAnswers] = useState<Record<number, number>>({});
   const [showHint, setShowHint] = useState(false);
   const [timeLeft, setTimeLeft] = useState(10 * 60);
+  const [quizStarted, setQuizStarted] = useState(false);
+  const [quizFinished, setQuizFinished] = useState(false);
+  const [isSavingQuizSession, setIsSavingQuizSession] = useState(false);
+  const [quizSessionError, setQuizSessionError] = useState('');
+  const [existingQuizSession, setExistingQuizSession] = useState<any>(null);
 
   const config = toolConfig[tool];
 
@@ -117,7 +166,7 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
   }, [selectedSubjectId]);
 
   useEffect(() => {
-    if (tool !== 'quiz' || !output?.questions?.length) return;
+    if (tool !== 'quiz' || !output?.questions?.length || !quizStarted || quizFinished) return;
     if (timeLeft <= 0) return;
 
     const timer = window.setTimeout(() => {
@@ -125,7 +174,7 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
     }, 1000);
 
     return () => window.clearTimeout(timer);
-  }, [tool, output, timeLeft]);
+  }, [tool, output, quizStarted, quizFinished, timeLeft]);
 
   const selectedSubject = useMemo(
     () => subjects.find((subject) => subject.id === selectedSubjectId) || null,
@@ -144,11 +193,15 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
     setCurrentCardIndex(0);
     setIsCardFlipped(false);
     setFlashcardRatings({});
+    setSelectedFlashcardRating(null);
     setQuizIndex(0);
     setSelectedOption(null);
     setSubmittedAnswers({});
     setShowHint(false);
     setTimeLeft(10 * 60);
+    setQuizStarted(false);
+    setQuizFinished(false);
+    setQuizSessionError('');
 
     try {
       const response = await generateStudyTool(
@@ -160,6 +213,11 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
         })),
       );
       setOutput(response.output);
+      writeStudyToolCache(tool, selectedSubject.id, {
+        signature: buildNotesSignature(subjectNotes),
+        output: response.output,
+        savedAt: Date.now(),
+      });
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Unable to generate study material.');
     } finally {
@@ -173,9 +231,38 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
       setOutput(null);
       return;
     }
+    const signature = buildNotesSignature(subjectNotes);
+    const cached = readStudyToolCache(tool, selectedSubjectId);
+    if (cached?.signature === signature && cached.output) {
+      setOutput(cached.output);
+      setError('');
+      return;
+    }
+    setOutput(null);
+  }, [selectedSubjectId, subjectNotes, tool]);
 
-    void generate();
-  }, [selectedSubjectId, subjectNotes]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (tool !== 'quiz' || !selectedSubjectId) {
+      setExistingQuizSession(null);
+      return;
+    }
+
+    void getNotebookQuizSession(selectedSubjectId)
+      .then((record) => setExistingQuizSession(record))
+      .catch(() => setExistingQuizSession(null));
+  }, [selectedSubjectId, tool]);
+
+  useEffect(() => {
+    if (tool !== 'quiz') return;
+    setQuizStarted(false);
+    setQuizFinished(false);
+    setQuizSessionError('');
+    setQuizIndex(0);
+    setSelectedOption(null);
+    setSubmittedAnswers({});
+    setShowHint(false);
+    setTimeLeft(10 * 60);
+  }, [selectedSubjectId, tool]);
 
   const flashcards = (output?.cards || []) as FlashcardRecord[];
   const quizQuestions = (output?.questions || []) as QuizRecord[];
@@ -194,6 +281,70 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
   const submitQuizAnswer = () => {
     if (selectedOption == null || !currentQuestion) return;
     setSubmittedAnswers((current) => ({ ...current, [quizIndex]: selectedOption }));
+  };
+
+  const startQuiz = async () => {
+    if (!selectedSubjectId || !selectedSubject || quizQuestions.length === 0) return;
+    setQuizStarted(true);
+    setQuizFinished(false);
+    setQuizSessionError('');
+    setQuizIndex(0);
+    setSelectedOption(null);
+    setSubmittedAnswers({});
+    setShowHint(false);
+    setTimeLeft(10 * 60);
+
+    try {
+      setIsSavingQuizSession(true);
+      const record = await updateNotebookQuizSession(selectedSubjectId, {
+        subjectName: selectedSubject.name,
+        attempted: true,
+        addTimeSeconds: 0,
+      });
+      setExistingQuizSession(record);
+    } catch {
+      setQuizSessionError('Could not sync quiz start right now. You can continue, then finish to retry sync.');
+    } finally {
+      setIsSavingQuizSession(false);
+    }
+  };
+
+  const finishQuiz = async () => {
+    if (!selectedSubjectId || !selectedSubject || quizQuestions.length === 0 || quizFinished) return;
+    const elapsedSeconds = Math.max(0, 10 * 60 - timeLeft);
+    const totalQuestions = quizQuestions.length;
+    const totalCorrectAnswers = correctCount;
+    const totalMistakes = Math.max(0, totalQuestions - totalCorrectAnswers);
+    const solved = answeredCount >= totalQuestions;
+    setQuizFinished(true);
+    setQuizSessionError('');
+
+    try {
+      setIsSavingQuizSession(true);
+      const record = await updateNotebookQuizSession(selectedSubjectId, {
+        subjectName: selectedSubject.name,
+        attempted: true,
+        solved,
+        totalQuestions,
+        correctCount: totalCorrectAnswers,
+        mistakeCount: totalMistakes,
+        addTimeSeconds: elapsedSeconds,
+      });
+      setExistingQuizSession(record);
+    } catch {
+      setQuizSessionError('Quiz finished locally, but syncing this quiz session failed.');
+    } finally {
+      setIsSavingQuizSession(false);
+    }
+  };
+
+  const submitFlashcardRating = () => {
+    if (selectedFlashcardRating == null) return;
+    setFlashcardRatings((current) => ({ ...current, [currentCardIndex]: selectedFlashcardRating }));
+    const nextIndex = Math.min(flashcards.length - 1, currentCardIndex + 1);
+    setCurrentCardIndex(nextIndex);
+    setIsCardFlipped(false);
+    setSelectedFlashcardRating(nextIndex === currentCardIndex ? selectedFlashcardRating : null);
   };
 
   const renderFlashcards = () => {
@@ -227,7 +378,11 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
           </div>
         </div>
 
-        <div className="study-tool-card flashcard-stage" onClick={() => setIsCardFlipped((current) => !current)}>
+        <button
+          type="button"
+          className="study-tool-card flashcard-stage"
+          onClick={() => setIsCardFlipped((current) => !current)}
+        >
           <div className="flashcard-stage-meta">
             <span className={`difficulty-pill difficulty-${currentCard.difficulty || 'medium'}`}>
               {currentCard.difficulty || 'medium'}
@@ -238,7 +393,7 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
             <h3>{isCardFlipped ? currentCard.answer : currentCard.question}</h3>
             <p>Click to flip</p>
           </div>
-        </div>
+        </button>
 
         <div className="study-tool-actions">
           <button
@@ -247,6 +402,7 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
             onClick={() => {
               setCurrentCardIndex((current) => Math.max(0, current - 1));
               setIsCardFlipped(false);
+              setSelectedFlashcardRating(flashcardRatings[Math.max(0, currentCardIndex - 1)] ?? null);
             }}
             disabled={currentCardIndex === 0}
           >
@@ -263,6 +419,8 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
             onClick={() => {
               setCurrentCardIndex((current) => Math.min(flashcards.length - 1, current + 1));
               setIsCardFlipped(false);
+              const nextIndex = Math.min(flashcards.length - 1, currentCardIndex + 1);
+              setSelectedFlashcardRating(flashcardRatings[nextIndex] ?? null);
             }}
             disabled={currentCardIndex >= flashcards.length - 1}
           >
@@ -272,14 +430,17 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
         </div>
 
         <div className="study-tool-actions">
-          <button type="button" className="btn-secondary" onClick={() => setFlashcardRatings((current) => ({ ...current, [currentCardIndex]: 'know' }))}>
+          <button type="button" className={`btn-secondary ${selectedFlashcardRating === 'know' ? 'active' : ''}`} onClick={() => setSelectedFlashcardRating('know')}>
             I Know This
           </button>
-          <button type="button" className="btn-secondary" onClick={() => setFlashcardRatings((current) => ({ ...current, [currentCardIndex]: 'later' }))}>
+          <button type="button" className={`btn-secondary ${selectedFlashcardRating === 'later' ? 'active' : ''}`} onClick={() => setSelectedFlashcardRating('later')}>
             Review Later
           </button>
-          <button type="button" className="btn-secondary" onClick={() => setFlashcardRatings((current) => ({ ...current, [currentCardIndex]: 'difficult' }))}>
+          <button type="button" className={`btn-secondary ${selectedFlashcardRating === 'difficult' ? 'active' : ''}`} onClick={() => setSelectedFlashcardRating('difficult')}>
             Difficult
+          </button>
+          <button type="button" className="btn-primary" onClick={submitFlashcardRating} disabled={selectedFlashcardRating == null}>
+            Submit
           </button>
         </div>
       </div>
@@ -288,6 +449,51 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
 
   const renderQuiz = () => {
     if (!currentQuestion) return null;
+
+    if (!quizStarted) {
+      return (
+        <div className="study-tool-stack">
+          <div className="study-tool-card study-sheet-intro">
+            <h3>Ready to begin?</h3>
+            <p>
+              This quiz has {quizQuestions.length} questions and a 10-minute timer. Click start when you are ready.
+            </p>
+            {existingQuizSession?.attempted ? (
+              <p>
+                Last saved result: {Number(existingQuizSession.correctCount || 0)}/
+                {Number(existingQuizSession.totalQuestions || 0)} correct, {Math.round(Number(existingQuizSession.totalTimeSeconds || 0) / 60)} min total.
+              </p>
+            ) : null}
+            <div className="study-tool-actions">
+              <button type="button" className="btn-primary" onClick={() => void startQuiz()} disabled={isSavingQuizSession}>
+                Start Quiz
+              </button>
+            </div>
+            {quizSessionError ? <div className="study-inline-panel">{quizSessionError}</div> : null}
+          </div>
+        </div>
+      );
+    }
+
+    if (quizFinished) {
+      return (
+        <div className="study-tool-stack">
+          <div className="study-tool-card study-sheet-intro">
+            <h3>Quiz Finished</h3>
+            <p>
+              You answered {correctCount} out of {quizQuestions.length} correctly.
+            </p>
+            <div className="study-tool-actions">
+              <button type="button" className="btn-secondary" onClick={() => void startQuiz()} disabled={isSavingQuizSession}>
+                Restart Quiz
+              </button>
+            </div>
+            {quizSessionError ? <div className="study-inline-panel">{quizSessionError}</div> : null}
+          </div>
+        </div>
+      );
+    }
+
     const submittedAnswer = submittedAnswers[quizIndex];
     const isSubmitted = submittedAnswer != null;
 
@@ -402,7 +608,11 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
             Next
             <ChevronRight size={16} />
           </button>
+          <button type="button" className="btn-primary" onClick={() => void finishQuiz()} disabled={isSavingQuizSession}>
+            Finish Quiz
+          </button>
         </div>
+        {quizSessionError ? <div className="study-inline-panel">{quizSessionError}</div> : null}
       </div>
     );
   };

@@ -209,6 +209,25 @@ export const initDb = async () => {
     `);
 
     await activePool.query(`
+      CREATE TABLE IF NOT EXISTS study_tool_cache (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        tool TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        notes_signature TEXT NOT NULL,
+        output JSONB NOT NULL,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL,
+        UNIQUE (user_id, tool, subject, notes_signature)
+      );
+    `);
+
+    await activePool.query(`
+      CREATE INDEX IF NOT EXISTS idx_study_tool_cache_lookup
+      ON study_tool_cache (user_id, tool, subject, notes_signature, updated_at DESC);
+    `);
+
+    await activePool.query(`
       CREATE TABLE IF NOT EXISTS problem_error_attempts (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -1300,6 +1319,55 @@ export const upsertNotebookQuizSession = async (
   return mapNotebookQuizSession(rows[0]);
 };
 
+const mapStudyToolCache = (row) => ({
+  id: row.id,
+  userId: row.user_id,
+  tool: row.tool,
+  subject: row.subject,
+  notesSignature: row.notes_signature,
+  output: row.output,
+  createdAt: Number(row.created_at),
+  updatedAt: Number(row.updated_at),
+});
+
+export const getStudyToolCache = async (userId, { tool, subject, notesSignature }) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT id, user_id, tool, subject, notes_signature, output, created_at, updated_at
+      FROM study_tool_cache
+      WHERE user_id = $1 AND tool = $2 AND subject = $3 AND notes_signature = $4
+      ORDER BY updated_at DESC
+      LIMIT 1;
+    `,
+    [userId, tool, subject, notesSignature],
+  );
+  if (rows.length === 0) return null;
+  return mapStudyToolCache(rows[0]);
+};
+
+export const upsertStudyToolCache = async (
+  userId,
+  { tool, subject, notesSignature, output },
+) => {
+  const now = Date.now();
+  const id = `${userId}:study-tool:${tool}:${subject}:${notesSignature}`;
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO study_tool_cache (
+        id, user_id, tool, subject, notes_signature, output, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $7)
+      ON CONFLICT (user_id, tool, subject, notes_signature)
+      DO UPDATE SET
+        output = EXCLUDED.output,
+        updated_at = EXCLUDED.updated_at
+      RETURNING id, user_id, tool, subject, notes_signature, output, created_at, updated_at;
+    `,
+    [id, userId, tool, subject, notesSignature, JSON.stringify(output || null), now],
+  );
+  return mapStudyToolCache(rows[0]);
+};
+
 export const createProblemErrorAttempt = async (
   userId,
   assignmentId,
@@ -1805,6 +1873,21 @@ export const listSocraticChatThreads = async (userId, limit = 50) => {
     [userId, safeLimit],
   );
   return rows.map(mapSocraticChatThread);
+};
+
+export const removeSocraticChatThread = async (userId, threadId) => {
+  const safeThreadId = String(threadId || "").trim();
+  if (!safeThreadId) return null;
+  const { rows } = await getPool().query(
+    `
+      DELETE FROM socratic_chat_threads
+      WHERE user_id = $1 AND id = $2
+      RETURNING id, user_id, title, '' AS preview, created_at, updated_at;
+    `,
+    [userId, safeThreadId],
+  );
+  if (rows.length === 0) return null;
+  return mapSocraticChatThread(rows[0]);
 };
 
 export const insertSocraticChatMessage = async (userId, { threadId, role, text, createdAt = Date.now() }) => {

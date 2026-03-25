@@ -3087,6 +3087,15 @@ textarea {
   min-height: 320px;
   cursor: pointer;
   background: linear-gradient(180deg, #ffffff, #eff6ff);
+  width: 100%;
+  text-align: inherit;
+  border: 1px solid rgba(196, 181, 253, 0.42);
+  display: block;
+}
+
+.flashcard-stage:focus-visible {
+  outline: 2px solid #8b5cf6;
+  outline-offset: 2px;
 }
 
 .flashcard-stage-meta,
@@ -3140,6 +3149,12 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.btn-secondary.active {
+  border-color: #8b5cf6;
+  background: #ede9fe;
+  color: #4c1d95;
 }
 
 .quiz-stage {
@@ -3626,16 +3641,13 @@ textarea {
 
 .socratic-history-item {
   width: 100%;
-  text-align: left;
   border: 1px solid transparent;
   background: transparent;
   border-radius: 12px;
-  padding: 10px 12px;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
   color: var(--ink);
-  cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 
@@ -3649,6 +3661,20 @@ textarea {
   border-color: var(--brand);
 }
 
+.socratic-history-item-main {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 10px 4px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: inherit;
+  cursor: pointer;
+}
+
 .socratic-history-item strong {
   font-size: 13px;
   font-weight: 600;
@@ -3656,6 +3682,27 @@ textarea {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.socratic-history-delete-btn {
+  width: 28px;
+  height: 28px;
+  margin-right: 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.socratic-history-delete-btn:hover {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.35);
+  background: rgba(220, 38, 38, 0.08);
 }
 
 .socratic-history-item span {

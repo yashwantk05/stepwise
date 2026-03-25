@@ -30,6 +30,7 @@ import {
   createProblemErrorAttempt,
   deleteUserData,
   findAssignmentById,
+  getStudyToolCache,
   getNotebookQuizSession,
   getProblemProgress,
   getAssignmentPdfByAssignmentId,
@@ -54,6 +55,7 @@ import {
   removeProblemTitle,
   removeScene,
   upsertNotebookQuizSession,
+  upsertStudyToolCache,
   upsertProblemProgress,
   removeAssignmentPdf,
   removeAssignment,
@@ -77,6 +79,7 @@ import {
   createSocraticChatThread,
   insertNotebookNote,
   insertSocraticChatMessage,
+  removeSocraticChatThread,
   updateNotebookNote,
   removeNotebookNote,
   listAllNotebookNotesForUser,
@@ -1798,6 +1801,7 @@ app.post("/api/notes/study-tools", requireAuth, async (request, response) => {
   const subject = String(request.body?.subject || "").trim();
   const notes = Array.isArray(request.body?.notes) ? request.body.notes : [];
   const supportedTools = new Set(["flashcards", "quiz", "revision-sheet", "mind-map"]);
+  const persistentCacheTools = new Set(["revision-sheet", "mind-map"]);
 
   if (!supportedTools.has(tool)) {
     response.status(400).json({ message: "Unsupported study tool." });
@@ -1825,18 +1829,49 @@ app.post("/api/notes/study-tools", requireAuth, async (request, response) => {
     .map((entry, index) => `Note ${index + 1}: ${entry.title || "Untitled"}\n${entry.content}`)
     .join("\n\n---\n\n")
     .slice(0, 50000);
+  const notesSignature = createHash("sha256")
+    .update(JSON.stringify(normalizedNotes))
+    .digest("hex");
+  const canUsePersistentCache = persistentCacheTools.has(tool);
 
   try {
+    if (canUsePersistentCache) {
+      const cached = await getStudyToolCache(request.user.id, {
+        tool,
+        subject,
+        notesSignature,
+      });
+      if (cached?.output) {
+        response.json({
+          tool,
+          subject,
+          output: cached.output,
+          cached: true,
+        });
+        return;
+      }
+    }
+
     const output = await generateStudyToolWithAzure({
       tool,
       subject,
       notesText,
     });
 
+    if (canUsePersistentCache) {
+      await upsertStudyToolCache(request.user.id, {
+        tool,
+        subject,
+        notesSignature,
+        output,
+      });
+    }
+
     response.json({
       tool,
       subject,
       output,
+      cached: false,
     });
   } catch (error) {
     console.error("Study tool generation failed:", error.message);
@@ -2550,6 +2585,15 @@ app.post("/api/socratic/threads", requireDb, requireAuth, async (request, respon
   const title = normalizeBoundedText(request.body?.title || "New chat", 120) || "New chat";
   const thread = await createSocraticChatThread(request.user.id, title);
   response.status(201).json(thread);
+});
+
+app.delete("/api/socratic/threads/:threadId", requireDb, requireAuth, async (request, response) => {
+  const deleted = await removeSocraticChatThread(request.user.id, request.params.threadId);
+  if (!deleted) {
+    response.status(404).json({ message: "Chat thread not found." });
+    return;
+  }
+  response.json({ deleted: true, threadId: deleted.id });
 });
 
 app.get("/api/socratic/threads/:threadId/messages", requireDb, requireAuth, async (request, response) => {

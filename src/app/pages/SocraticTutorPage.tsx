@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus, MessageSquarePlus, PanelLeft } from 'lucide-react';
+import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus, MessageSquarePlus, PanelLeft, Trash2 } from 'lucide-react';
 import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
 import { getUserSettings, listSubjects } from '../services/storage';
-import { createSocraticThread, getSpeechToken, getSocraticChatHistory, getSocraticThreadMessages, sendSocraticChat } from '../services/studyTools';
+import { createSocraticThread, deleteSocraticThread, getSpeechToken, getSocraticChatHistory, getSocraticThreadMessages, sendSocraticChat } from '../services/studyTools';
 import * as speechSdk from 'microsoft-cognitiveservices-speech-sdk';
 
 // Extend window for mathlive
@@ -569,6 +569,24 @@ export function SocraticTutorPage({
     void speakAssistantReply(messageId, text);
   }, [speakAssistantReply, stopAssistantSpeech]);
 
+  const handleDeleteThread = useCallback(async (threadId: string) => {
+    try {
+      await deleteSocraticThread(threadId);
+      const fallbackThreadId = activeThreadId === threadId
+        ? (threads.find((item) => item.id !== threadId)?.id || null)
+        : activeThreadId;
+      setThreads((current) => current.filter((item) => item.id !== threadId));
+      if (activeThreadId === threadId) {
+        setActiveThreadId(fallbackThreadId);
+        if (!fallbackThreadId) {
+          setMessages([INITIAL_ASSISTANT_MESSAGE]);
+        }
+      }
+    } catch {
+      // Keep UI unchanged when delete fails.
+    }
+  }, [activeThreadId, threads]);
+
   const stopRecording = useCallback(() => {
     setIsRecording(false);
     setActiveMode(null);
@@ -717,18 +735,34 @@ export function SocraticTutorPage({
 
           <div className="socratic-history-list">
             {threads.map((thread) => (
-              <button
+              <div
                 key={thread.id}
-                type="button"
                 className={`socratic-history-item ${activeThreadId === thread.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveThreadId(thread.id);
-                  setIsHistoryOpen(false);
-                }}
               >
-                <strong>{thread.title || 'New chat'}</strong>
-                <span>{thread.preview || 'Open conversation'}</span>
-              </button>
+                <button
+                  type="button"
+                  className="socratic-history-item-main"
+                  onClick={() => {
+                    setActiveThreadId(thread.id);
+                    setIsHistoryOpen(false);
+                  }}
+                >
+                  <strong>{thread.title || 'New chat'}</strong>
+                  <span>{thread.preview || 'Open conversation'}</span>
+                </button>
+                <button
+                  type="button"
+                  className="socratic-history-delete-btn"
+                  aria-label={`Delete ${thread.title || 'chat'}`}
+                  title="Delete chat"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void handleDeleteThread(thread.id);
+                  }}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
           </div>
         </aside>

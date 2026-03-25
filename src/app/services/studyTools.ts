@@ -123,6 +123,22 @@ export async function createSocraticThread(title = "New chat") {
   return payload as { id: string; title: string; preview: string; createdAt: number; updatedAt: number };
 }
 
+export async function deleteSocraticThread(threadId: string) {
+  const response = await fetch(`${API_BASE}/socratic/threads/${encodeURIComponent(threadId)}`, {
+    method: "DELETE",
+    credentials: "include",
+    headers: {
+      ...buildDevHeaders(),
+    },
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(String(payload?.message || "Failed to delete Socratic chat."));
+  }
+  return payload as { deleted: boolean; threadId: string };
+}
+
 export async function getSocraticThreadMessages(threadId: string, limit = 200) {
   const response = await fetch(
     `${API_BASE}/socratic/threads/${encodeURIComponent(threadId)}/messages?limit=${encodeURIComponent(String(limit))}`,

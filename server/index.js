@@ -135,13 +135,60 @@ const extractTextFromPdfBuffer = async (buffer) => {
 const MAX_PDF_IMAGES_PER_BLOB = 1;
 const MAX_RETRIEVED_SOURCE_IMAGES = 3;
 const MAX_RETRIEVED_SOURCE_BLOBS = 2;
+const MAX_TEXT_CONTEXT_RESULTS = 3;
+const MAX_NOTE_CONTEXT_CHARS = 1800;
 const VISUAL_QUERY_HINT_REGEX =
   /\b(image|photo|diagram|graph|figure|chart|table|draw|drawing|shown|see|visual|look at|looks like)\b/i;
 const QR_OR_BARCODE_HINT_REGEX =
   /\b(qr|barcode|scan code|scan this|upi|paytm|gpay|whatsapp web|scan to pay)\b/i;
+const SMALL_TALK_QUERY_REGEX =
+  /^(hi|hello|hey|yo|hola|sup|thanks|thank you|ok|okay|again|hmm|huh|cool|nice|great)\b/i;
 const containsQrLikeHints = (value) => QR_OR_BARCODE_HINT_REGEX.test(String(value || ""));
 const shouldUseRetrievedSourceImages = (query, userImages) =>
   userImages.length === 0 && VISUAL_QUERY_HINT_REGEX.test(String(query || ""));
+const normalizeIntentQuery = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+const shouldUseNotesSearchForQuery = ({ query, hasAudio, imageCount }) => {
+  if (hasAudio) return { enabled: false, reason: "audio_request" };
+  if (Number(imageCount) > 0) return { enabled: false, reason: "image_request" };
+
+  const normalized = normalizeIntentQuery(query);
+  if (!normalized) return { enabled: false, reason: "empty_query" };
+  if (SMALL_TALK_QUERY_REGEX.test(normalized)) {
+    return { enabled: false, reason: "small_talk_query" };
+  }
+
+  const words = normalized.split(" ").filter(Boolean);
+  const hasMathHints = /\d|[=+\-*/^()]/.test(String(query || ""));
+  if (!hasMathHints && words.length <= 2 && normalized.length <= 10) {
+    return { enabled: false, reason: "short_non_math_query" };
+  }
+
+  return { enabled: true, reason: "content_query" };
+};
+
+const buildBoundedNoteContext = (searchResults) => {
+  if (!Array.isArray(searchResults) || searchResults.length === 0) return "";
+  const lines = ["Relevant notes context from student's notebook:"];
+  for (let i = 0; i < searchResults.length && i < MAX_TEXT_CONTEXT_RESULTS; i += 1) {
+    const res = searchResults[i] || {};
+    const title = String(res.title || "").trim().slice(0, 140) || "Untitled note";
+    const snippet = String(res.chunkText || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 420);
+    if (!snippet) continue;
+    const block = `[${i + 1}] Title: ${title}\nContent snippet: ${snippet}`;
+    if (`${lines.join("\n\n")}\n\n${block}`.length > MAX_NOTE_CONTEXT_CHARS) break;
+    lines.push(block);
+  }
+  return lines.length > 1 ? lines.join("\n\n") : "";
+};
+
 const extractImagesFromPdfBuffer = async (buffer) => {
   if (!PdfParseCtor || !buffer) return [];
 
@@ -2264,16 +2311,19 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
 
   try {
     const searchQuery = message || "student question";
-    const searchResults = await searchNotes(request.user.id, searchQuery, subjectId, 5);
+    const searchStrategy = shouldUseNotesSearchForQuery({
+      query: searchQuery,
+      hasAudio: Boolean(audioBase64),
+      imageCount: images.length,
+    });
+    const searchResults = searchStrategy.enabled
+      ? await searchNotes(request.user.id, searchQuery, subjectId, 5)
+      : [];
     
     // Build text context from search results
-    let noteContext = "";
-    if (searchResults && searchResults.length > 0) {
-      noteContext = "Relevant notes context from student's notebook:\n" + 
-        searchResults.map((res, i) => `[${i + 1}] Title: ${res.title}\nContent snippet: ${res.chunkText}`).join("\n\n");
-    }
+    const noteContext = buildBoundedNoteContext(searchResults);
 
-    const shouldRetrieveSourceImages = shouldUseRetrievedSourceImages(searchQuery, images);
+    const shouldRetrieveSourceImages = searchStrategy.enabled && shouldUseRetrievedSourceImages(searchQuery, images);
 
     // Fetch source images for multimodal context (image notes + PDF pages)
     const retrievedImages = [];
@@ -2357,6 +2407,8 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
         historyCount: history.length,
         classLevel,
         searchQueryChars: searchQuery.length,
+        searchEnabled: searchStrategy.enabled,
+        searchReason: searchStrategy.reason,
         searchResultCount: searchResults.length,
         noteContextChars: noteContext.length,
         shouldRetrieveSourceImages,
@@ -2446,6 +2498,8 @@ ${noteContext}`;
         userId: request.user?.id || "unknown",
         threadId: threadId || null,
         historyCount: history.length,
+        searchEnabled: searchStrategy.enabled,
+        searchReason: searchStrategy.reason,
         searchResultCount: searchResults.length,
         noteContextChars: noteContext.length,
         uploadedImageCount: images.length,

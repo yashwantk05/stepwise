@@ -52,4 +52,4 @@ jobs:
           app-name: 'stepwise-'
           slot-name: 'Production'
           package: .
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_B5A7475FBCB34548B30EE9A71550BDE3 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_0D55D023F8E74717BDF73444F2E1A927 }}

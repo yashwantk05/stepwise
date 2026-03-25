@@ -74,6 +74,59 @@ const buildFixExplanation = (title: string) => {
   return 'Review this pattern with one solved example, then redo the same type without hints.';
 };
 
+const buildFallbackMistakes = (title: string) => {
+  const lowered = title.toLowerCase();
+  if (lowered.includes('sign')) {
+    return [
+      'Dropped a negative sign when distributing across parentheses.',
+      'Swapped signs while moving terms across the equals sign.',
+      'Combined unlike terms with the wrong sign after simplification.',
+    ];
+  }
+  if (lowered.includes('formula') || lowered.includes('equation')) {
+    return [
+      'Plugged values into the formula without isolating the target variable.',
+      'Used the correct formula but substituted the wrong value/units.',
+      'Skipped the final simplification after substitution.',
+    ];
+  }
+  if (lowered.includes('step')) {
+    return [
+      'Skipped an intermediate step that changed the structure of the expression.',
+      'Combined steps too early and lost a term in the transition.',
+      'Moved to the next step without re-checking the previous line.',
+    ];
+  }
+  if (lowered.includes('arithmetic') || lowered.includes('calculation')) {
+    return [
+      'Miscalculated a product or division in the middle of the solution.',
+      'Copied an intermediate value incorrectly into the next line.',
+      'Rounded too early, which changed the final answer.',
+    ];
+  }
+  if (lowered.includes('concept')) {
+    return [
+      'Chose the wrong method for this concept even though the goal was clear.',
+      'Applied a rule that does not match the problem conditions.',
+      'Stopped after a partial result instead of completing the full requirement.',
+    ];
+  }
+  return [
+    'Misidentified the key concept needed to solve the problem.',
+    'Missed a condition or constraint stated in the prompt.',
+    'Stopped after partial progress instead of reaching the final form.',
+  ];
+};
+
+const buildInsightSummary = (title: string, count: number, uniqueErrors: number) => {
+  const pluralizedCount = count === 1 ? 'mistake' : 'mistakes';
+  const pluralizedPatterns = uniqueErrors === 1 ? 'pattern' : 'patterns';
+  if (count === 0) {
+    return `We have limited signal for ${title} so far. Keep solving to surface clearer patterns.`;
+  }
+  return `Observed ${count} ${pluralizedCount} in ${title} with ${uniqueErrors} ${pluralizedPatterns}. Use the examples below to compare against your recent attempts.`;
+};
+
 export function WeakAreasPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('Loading learning diagnostics...');
@@ -184,14 +237,18 @@ export function WeakAreasPage() {
             .map(([key, value]) => ({
               id: `${subject.id}-${key}`,
               title: value.title,
+              summary: buildInsightSummary(value.title, errorTypeCounts.get(key) || 0, value.errors.size),
+              count: errorTypeCounts.get(key) || 0,
+              uniqueErrors: value.errors.size,
+              uniqueFixes: value.fixes.size,
               errors:
                 value.errors.size > 0
-                  ? Array.from(value.errors).slice(0, 4)
-                  : [`${errorTypeCounts.get(key) || 0} mistakes detected in this category.`],
-              fix:
+                  ? Array.from(value.errors).slice(0, 6)
+                  : buildFallbackMistakes(value.title),
+              fixes:
                 value.fixes.size > 0
-                  ? Array.from(value.fixes).slice(0, 2).join(' ')
-                  : buildFixExplanation(value.title),
+                  ? Array.from(value.fixes).slice(0, 3)
+                  : [buildFixExplanation(value.title)],
             }))
             .filter((group) => group.errors.length > 0);
 

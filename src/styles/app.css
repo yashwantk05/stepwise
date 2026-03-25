@@ -2911,6 +2911,47 @@ textarea {
   animation: weakAccordionIn 0.2s ease;
 }
 
+.learning-insight-summary {
+  margin: 0 0 12px;
+  color: #1e293b;
+  line-height: 1.6;
+}
+
+.learning-insight-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 0.95rem;
+  color: #475569;
+}
+
+.learning-insight-metrics span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(226, 232, 240, 0.6);
+}
+
+.learning-insight-section {
+  display: grid;
+  gap: 8px;
+}
+
+.learning-insight-section + .learning-insight-section {
+  margin-top: 14px;
+}
+
+.learning-insight-section h4 {
+  margin: 0;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
 .learning-group-body ul {
   margin: 0 0 14px;
   padding-left: 18px;
@@ -4931,6 +4972,15 @@ html[data-color-theme="dark"] .form-help,
 html[data-color-theme="dark"] .auth-card .subtitle,
 html[data-color-theme="dark"] .whiteboard-info p {
   color: #cbd5e1 !important;
+}
+
+html[data-color-theme="dark"] .learning-insight-metrics span {
+  background: rgb(15 23 42 / 0.7);
+  color: #e2e8f0;
+}
+
+html[data-color-theme="dark"] .learning-insight-section h4 {
+  color: #94a3b8;
 }
 
 html[data-color-theme="dark"] .notes-header h1,

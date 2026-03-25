@@ -56,7 +56,7 @@ export function Sidebar({
           onClick={() => handleNavigate('weak-areas')}
         >
           <span className="nav-icon"><AlertTriangle size={20} /></span>
-          <span className="nav-label">Weak Areas</span>
+          <span className="nav-label">Improvement Zones</span>
         </button>
 
         <button

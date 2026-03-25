@@ -997,10 +997,21 @@ export const getNotebookQuizSessions = async (): Promise<NotebookQuizSessionReco
 
 export const getErrorSummary = async (
   groupBy: "topic" | "concept" | "errorType",
-): Promise<ErrorSummaryRecord[]> =>
-  ((await request(`/errors/summary?groupBy=${encodeURIComponent(groupBy)}`)) as {
+  options: { assignmentId?: string; limit?: number } = {},
+): Promise<ErrorSummaryRecord[]> => {
+  const params = new URLSearchParams();
+  params.set("groupBy", groupBy);
+  if (options.assignmentId) {
+    params.set("assignmentId", String(options.assignmentId));
+  }
+  if (Number.isFinite(options.limit)) {
+    params.set("limit", String(Math.max(1, Math.min(100, Number(options.limit)))));
+  }
+
+  return ((await request(`/errors/summary?${params.toString()}`)) as {
     items?: ErrorSummaryRecord[];
   })?.items || [];
+};
 
 export const getProblemErrors = async (
   assignmentId: string,

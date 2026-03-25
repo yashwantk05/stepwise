@@ -1657,6 +1657,109 @@ const normalizeErrorPayload = (body) => {
   };
 };
 
+const inferErrorTypeFromText = (value = "") => {
+  const text = String(value || "").toLowerCase();
+  if (!text) return "concept review";
+  if (/(arithmetic|calculate|calculation|compute|addition|subtraction|multiply|division)/.test(text)) {
+    return "arithmetic";
+  }
+  if (/(sign|negative|positive)/.test(text)) {
+    return "sign error";
+  }
+  if (/(substitut|plug|replace)/.test(text)) {
+    return "substitution";
+  }
+  if (/(equation|solve|isolate|inverse)/.test(text)) {
+    return "equation solving";
+  }
+  if (/(fraction|denominator|numerator)/.test(text)) {
+    return "fractions";
+  }
+  return "concept review";
+};
+
+const inferTopicsFromContext = (problemContext = "", stage = "", errorText = "") => {
+  const haystack = `${problemContext} ${stage} ${errorText}`.toLowerCase();
+  const topics = [];
+  const maybeAdd = (topic, pattern) => {
+    if (pattern.test(haystack) && !topics.includes(topic)) {
+      topics.push(topic);
+    }
+  };
+
+  maybeAdd("algebra", /\b(algebra|equation|expression|factor|simplif|solve|linear|quadratic)\b/);
+  maybeAdd("geometry", /\b(geometry|angle|triangle|circle|area|perimeter|volume)\b/);
+  maybeAdd("calculus", /\b(calculus|derivative|integral|limit|differentiat|integrat)\b/);
+  maybeAdd("trigonometry", /\b(trigonometry|trig|sin|cos|tan|sec|csc|cot)\b/);
+  maybeAdd("statistics", /\b(statistics|probability|mean|median|variance|distribution)\b/);
+  maybeAdd("fractions", /\b(fraction|denominator|numerator)\b/);
+
+  return topics.slice(0, MAX_TOPICS_PER_MISTAKE);
+};
+
+const inferConceptsFromAnalysis = (observedStep = "", errorText = "", stage = "") => {
+  const haystack = `${observedStep} ${errorText} ${stage}`.toLowerCase();
+  const concepts = [];
+  const maybeAdd = (concept, pattern) => {
+    if (pattern.test(haystack) && !concepts.includes(concept)) {
+      concepts.push(concept);
+    }
+  };
+
+  maybeAdd("inverse operations", /\b(inverse|isolate|equation|solve)\b/);
+  maybeAdd("sign handling", /\b(sign|negative|positive)\b/);
+  maybeAdd("arithmetic", /\b(arithmetic|calculate|calculation|addition|subtraction|multiply|division)\b/);
+  maybeAdd("substitution", /\b(substitut|plug|replace)\b/);
+  maybeAdd("fractions", /\b(fraction|denominator|numerator)\b/);
+  maybeAdd("simplification", /\b(simplif|combine like terms|reduce)\b/);
+
+  return concepts.slice(0, MAX_CONCEPTS_PER_MISTAKE);
+};
+
+const buildAutoErrorPayload = ({
+  analysis,
+  errors = [],
+  hintLevel = null,
+  problemContext = "",
+}) => {
+  const observedStep = normalizeBoundedText(analysis?.observed_step, MAX_OBSERVED_STEP_LENGTH);
+  const stage = normalizeBoundedText(analysis?.stage, MAX_STAGE_LENGTH);
+  const correctness = normalizeBoundedText(analysis?.correctness, 20).toLowerCase();
+  const confidence = normalizeBoundedText(analysis?.confidence, 20).toLowerCase() || "medium";
+  const primaryError = normalizeBoundedText(errors.find(Boolean) || "", MAX_MISTAKE_SUMMARY_LENGTH);
+
+  if (correctness !== "incorrect" || !primaryError) {
+    return null;
+  }
+
+  return {
+    source: "error_analysis",
+    observedStep,
+    stage,
+    correctness: "incorrect",
+    confidence: ["low", "medium", "high"].includes(confidence) ? confidence : "medium",
+    hintLevel: Number.isInteger(hintLevel) ? hintLevel : null,
+    rawAnalysis:
+      analysis && typeof analysis === "object"
+        ? {
+            ...analysis,
+            extractedErrors: errors.filter(Boolean),
+          }
+        : null,
+    mistakes: [
+      {
+        errorType: inferErrorTypeFromText(`${stage} ${primaryError}`),
+        mistakeSummary: primaryError,
+        whyWrong: normalizeBoundedText(primaryError, MAX_WHY_WRONG_LENGTH),
+        suggestedFix: "",
+        severity: "medium",
+        topics: inferTopicsFromContext(problemContext, stage, primaryError),
+        concepts: inferConceptsFromAnalysis(observedStep, primaryError, stage),
+      },
+    ],
+  };
+};
+
 const getAssignmentAndProblemIndex = async (request, response) => {
   const assignment = await findAssignmentById(request.user.id, request.params.id);
   if (!assignment) {
@@ -2729,6 +2832,8 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       drawingMimeType: file.mimetype || "image/png",
     });
 
+    const hintLevel = Math.min(4, Math.max(1, Number(request.body?.hintLevel) || 1));
+
     let analysis = {
       observed_step: "",
       correctness: errorCheck.hasError ? "incorrect" : "unclear",
@@ -2762,7 +2867,6 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       }
 
       const isUnreadableStep = !observedStep || observedStep.toLowerCase() === "unreadable";
-      const hintLevel = Math.min(4, Math.max(1, Number(request.body?.hintLevel) || 1));
       const previousHints = Array.isArray(safeJsonParse(request.body?.previousHints))
         ? safeJsonParse(request.body.previousHints).slice(0, 5).map(String)
         : [];
@@ -2780,6 +2884,29 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         errors = [sanitizeHint(hint)];
         hint = "";
         analysis.correctness = "incorrect";
+      }
+    }
+
+    if (assignmentId && problemIndex != null) {
+      const errorPayload = buildAutoErrorPayload({
+        analysis,
+        errors,
+        hintLevel,
+        problemContext,
+      });
+
+      if (errorPayload) {
+        const normalizedPayload = normalizeErrorPayload(errorPayload);
+        if (normalizedPayload.payload) {
+          void createProblemErrorAttempt(
+            request.user.id,
+            assignmentId,
+            problemIndex,
+            normalizedPayload.payload,
+          ).catch((persistError) => {
+            console.error("AI analyze error persistence failed:", persistError.message);
+          });
+        }
       }
     }
 

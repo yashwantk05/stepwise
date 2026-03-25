@@ -1191,6 +1191,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
             key={sceneRevision}
             initialData={initialScene}
             onChange={handleChange}
+            detectScroll={true}
             UIOptions={{
               canvasActions: {
                 saveAsImage: false,

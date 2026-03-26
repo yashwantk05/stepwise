@@ -88,21 +88,12 @@ export function Topbar({
         </div>
 
         <button className="icon-button notification-button" title="AI Recommendations">
-          {/* Inline SVG so sizing/styling is deterministic */}
-          <svg
-            width="40"
-            height="40"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
+          <img
+            src="/notification-bell-svgrepo-com.svg"
+            alt=""
             aria-hidden="true"
-          >
-            <path d="M12 22a2 2 0 0 0 2-2H10a2 2 0 0 0 2 2Z" />
-            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 7h18s-3 0-3-7Z" />
-          </svg>
+            className="notification-icon"
+          />
           {notificationCount > 0 ? <span className="notification-badge">{notificationCount}</span> : null}
         </button>
         <div style={{ position: 'relative' }} ref={menuRef}>

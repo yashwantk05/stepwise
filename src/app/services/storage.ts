@@ -111,6 +111,7 @@ interface FileRecord {
   fileName: string;
   size: number;
   uploadedAt: number;
+  channel?: string;
 }
 
 interface Note {
@@ -860,6 +861,52 @@ export const downloadAssignmentPdfBlob = async (assignmentId: string): Promise<B
 
 export const deleteAssignmentPdf = async (assignmentId: string): Promise<void> => {
   await request(`/assignments/${encodeURIComponent(assignmentId)}/pdf`, {
+    method: "DELETE",
+  });
+};
+
+export const saveAssignmentCaptureImage = async (assignmentId: string, file: File): Promise<void> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  await request(`/assignments/${encodeURIComponent(assignmentId)}/capture`, {
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getAssignmentCaptureImage = async (assignmentId: string): Promise<FileRecord | null> => {
+  return (await request(`/assignments/${encodeURIComponent(assignmentId)}/capture`)) as FileRecord | null;
+};
+
+export const getAssignmentCaptureImageDownloadUrl = async (assignmentId: string): Promise<string> => {
+  try {
+    const data = (await request(
+      `/assignments/${encodeURIComponent(assignmentId)}/capture/download-url`,
+    )) as { url?: string };
+    if (typeof data?.url === "string" && data.url.length > 0) {
+      return data.url;
+    }
+  } catch (error) {
+    const typedError = error as Error & { status?: number };
+    if (typedError.status !== 404) throw error;
+  }
+  return toUrl(`/assignments/${encodeURIComponent(assignmentId)}/capture/download`);
+};
+
+export const downloadAssignmentCaptureImageBlob = async (assignmentId: string): Promise<Blob> => {
+  const response = await fetch(toUrl(`/assignments/${encodeURIComponent(assignmentId)}/capture/download`), {
+    credentials: "include",
+    headers: buildUserHeaders(),
+  });
+  if (!response.ok) {
+    throw await buildError(response);
+  }
+  return response.blob();
+};
+
+export const deleteAssignmentCaptureImage = async (assignmentId: string): Promise<void> => {
+  await request(`/assignments/${encodeURIComponent(assignmentId)}/capture`, {
     method: "DELETE",
   });
 };

@@ -35,7 +35,10 @@ interface ErrorSummaryRecord {
 interface ProblemErrorItemRecord {
   errorType?: string;
   mistakeSummary?: string;
+  whyWrong?: string;
   suggestedFix?: string;
+  topics?: string[];
+  concepts?: string[];
 }
 
 interface ProblemErrorAttemptRecord {
@@ -195,8 +198,8 @@ export function WeakAreasPage() {
             const problemIndexesWithMistakes = progressRows
               .filter((row) => Number(row.mistakeCount || 0) > 0)
               .map((row) => Number(row.problemIndex))
-              .filter((value) => Number.isInteger(value) && value > 0)
-              .slice(0, 6);
+              .filter((value) => Number.isInteger(value) && value >= 0)
+              .slice(0, 12);
 
             const attemptsByProblem = await Promise.all(
               problemIndexesWithMistakes.map((problemIndex) =>
@@ -222,8 +225,14 @@ export function WeakAreasPage() {
                 if (!bucket) return;
 
                 const summary = normalizeLabel(item.mistakeSummary);
+                const whyWrong = normalizeLabel(item.whyWrong);
                 const fix = normalizeLabel(item.suggestedFix);
-                if (summary) bucket.errors.add(summary);
+                if (summary || whyWrong) {
+                  const combined = summary && whyWrong ? `${summary} — ${whyWrong}` : summary || whyWrong;
+                  if (combined) bucket.errors.add(combined);
+                } else if (rawType) {
+                  bucket.errors.add(`Error type: ${formatErrorTypeTitle(rawType)}`);
+                }
                 if (fix) bucket.fixes.add(fix);
               });
             });
@@ -234,22 +243,25 @@ export function WeakAreasPage() {
               (left, right) =>
                 (errorTypeCounts.get(right[0]) || 0) - (errorTypeCounts.get(left[0]) || 0),
             )
-            .map(([key, value]) => ({
-              id: `${subject.id}-${key}`,
-              title: value.title,
-              summary: buildInsightSummary(value.title, errorTypeCounts.get(key) || 0, value.errors.size),
-              count: errorTypeCounts.get(key) || 0,
-              uniqueErrors: value.errors.size,
-              uniqueFixes: value.fixes.size,
-              errors:
-                value.errors.size > 0
-                  ? Array.from(value.errors).slice(0, 6)
-                  : buildFallbackMistakes(value.title),
-              fixes:
-                value.fixes.size > 0
-                  ? Array.from(value.fixes).slice(0, 3)
-                  : [buildFixExplanation(value.title)],
-            }))
+            .map(([key, value]) => {
+              const resolvedCount = Math.max(errorTypeCounts.get(key) || 0, value.errors.size);
+              return {
+                id: `${subject.id}-${key}`,
+                title: value.title,
+                summary: buildInsightSummary(value.title, resolvedCount, value.errors.size),
+                count: resolvedCount,
+                uniqueErrors: value.errors.size,
+                uniqueFixes: value.fixes.size,
+                errors:
+                  value.errors.size > 0
+                    ? Array.from(value.errors).slice(0, 6)
+                    : buildFallbackMistakes(value.title),
+                fixes:
+                  value.fixes.size > 0
+                    ? Array.from(value.fixes).slice(0, 3)
+                    : [buildFixExplanation(value.title)],
+              };
+            })
             .filter((group) => group.errors.length > 0);
 
           return {

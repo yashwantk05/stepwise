@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import {
   createReadSasUrl,
   deleteBlobIfExists,
+  downloadAssignmentCaptureFromBlob,
   downloadAssignmentPdfFromBlob,
   downloadProblemImageBufferFromBlob,
   downloadProblemImageFromBlob,
@@ -22,6 +23,7 @@ import {
   downloadNoteFileFromBlob,
   downloadNoteFileBufferFromBlob,
   uploadAssignmentPdfToBlob,
+  uploadAssignmentCaptureToBlob,
   uploadProblemImageToBlob,
   uploadProblemSceneToBlob,
   uploadNoteFileToBlob,
@@ -34,6 +36,7 @@ import {
   getNotebookQuizSession,
   getProblemProgress,
   getAssignmentPdfByAssignmentId,
+  getAssignmentCaptureImageByAssignmentId,
   getProblemContext,
   getProblemImage,
   getScene,
@@ -42,6 +45,7 @@ import {
   listNotebookQuizSessions,
   listProblemProgressForAssignment,
   listAssignmentPdfsForUser,
+  listAssignmentCaptureImagesForUser,
   listProblemErrorAttempts,
   listProblemErrorSummary,
   listProblemImageBlobNamesForAssignment,
@@ -58,6 +62,7 @@ import {
   upsertStudyToolCache,
   upsertProblemProgress,
   removeAssignmentPdf,
+  removeAssignmentCaptureImage,
   removeAssignment,
   setAssignmentProblemCount,
   setProblemTitle,
@@ -66,6 +71,7 @@ import {
   upsertProblemContext,
   upsertProblemImage,
   upsertAssignmentPdf,
+  upsertAssignmentCaptureImage,
   upsertScene,
   upsertUser,
   listNotebookSubjects,
@@ -3068,6 +3074,8 @@ app.post("/api/auth/logout", (request, response) => {
 app.delete("/api/account", requireDb, requireAuth, async (request, response) => {
   const uploadedPdfs = await listAssignmentPdfsForUser(request.user.id);
   await Promise.all(uploadedPdfs.map((record) => deleteBlobIfExists(record.blobName)));
+  const uploadedCaptures = await listAssignmentCaptureImagesForUser(request.user.id);
+  await Promise.all(uploadedCaptures.map((record) => deleteBlobIfExists(record.blobName)));
   const problemImageBlobNames = await listProblemImageBlobNamesForUser(request.user.id);
   await Promise.all(problemImageBlobNames.map((blobName) => deleteBlobIfExists(blobName)));
   await deleteUserData(request.user.id);
@@ -3113,6 +3121,11 @@ app.delete("/api/assignments/:id", requireDb, requireAuth, async (request, respo
   if (existingPdf) {
     await deleteBlobIfExists(existingPdf.blobName);
     await removeAssignmentPdf(request.user.id, request.params.id);
+  }
+  const existingCapture = await getAssignmentCaptureImageByAssignmentId(request.user.id, request.params.id);
+  if (existingCapture) {
+    await deleteBlobIfExists(existingCapture.blobName);
+    await removeAssignmentCaptureImage(request.user.id, request.params.id);
   }
 
   const sceneBlobNames = await listSceneBlobNamesForAssignment(request.user.id, request.params.id);
@@ -3441,6 +3454,154 @@ app.get("/api/assignments/:id/pdf/download", requireDb, requireAuth, async (requ
   }
 
   response.setHeader("Content-Type", record.contentType || "application/pdf");
+  response.setHeader("Content-Length", String(blob.contentLength || record.size));
+  response.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(record.fileName)}"`);
+  blob.stream.pipe(response);
+});
+
+app.get("/api/assignments/:id/capture", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await getAssignmentCaptureImageByAssignmentId(request.user.id, request.params.id);
+  if (!record) {
+    response.json(null);
+    return;
+  }
+
+  response.json({
+    assignmentId: record.assignmentId,
+    fileName: record.fileName,
+    contentType: record.contentType,
+    size: record.size,
+    uploadedAt: record.uploadedAt,
+    updatedAt: record.updatedAt,
+    channel: "image/capture",
+  });
+});
+
+app.post(
+  "/api/assignments/:id/capture",
+  requireDb,
+  requireAuth,
+  imageUpload.single("file"),
+  async (request, response) => {
+    const assignment = await findAssignmentById(request.user.id, request.params.id);
+    if (!assignment) {
+      response.status(404).json({ message: "Assignment not found." });
+      return;
+    }
+
+    const file = request.file;
+    if (!file) {
+      response.status(400).json({ message: "Capture image is required." });
+      return;
+    }
+
+    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    if (!allowedTypes.has(file.mimetype)) {
+      response.status(400).json({ message: "Only PNG, JPEG, and WEBP uploads are supported." });
+      return;
+    }
+
+    const existingRecord = await getAssignmentCaptureImageByAssignmentId(request.user.id, request.params.id);
+    const blobName = await uploadAssignmentCaptureToBlob({
+      userId: request.user.id,
+      assignmentId: request.params.id,
+      fileName: file.originalname || "problem-capture",
+      contentType: file.mimetype,
+      buffer: file.buffer,
+    });
+
+    let record = null;
+    try {
+      record = await upsertAssignmentCaptureImage({
+        assignmentId: request.params.id,
+        userId: request.user.id,
+        blobName,
+        fileName: file.originalname || "problem-capture",
+        contentType: file.mimetype,
+        size: file.size,
+      });
+    } catch (error) {
+      await deleteBlobIfExists(blobName);
+      throw error;
+    }
+
+    if (existingRecord && existingRecord.blobName !== blobName) {
+      await deleteBlobIfExists(existingRecord.blobName);
+    }
+
+    response.status(201).json({
+      assignmentId: record.assignmentId,
+      fileName: record.fileName,
+      contentType: record.contentType,
+      size: record.size,
+      uploadedAt: record.uploadedAt,
+      updatedAt: record.updatedAt,
+      channel: "image/capture",
+    });
+  },
+);
+
+app.delete("/api/assignments/:id/capture", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await removeAssignmentCaptureImage(request.user.id, request.params.id);
+  if (record) {
+    await deleteBlobIfExists(record.blobName);
+  }
+  response.status(204).send();
+});
+
+app.get("/api/assignments/:id/capture/download-url", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await getAssignmentCaptureImageByAssignmentId(request.user.id, request.params.id);
+  if (!record) {
+    response.status(404).json({ message: "No capture image uploaded yet." });
+    return;
+  }
+
+  const url = await createReadSasUrl(record.blobName);
+  if (!url) {
+    response.status(404).json({ message: "Direct download URL is unavailable." });
+    return;
+  }
+  response.json({ url });
+});
+
+app.get("/api/assignments/:id/capture/download", requireDb, requireAuth, async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const record = await getAssignmentCaptureImageByAssignmentId(request.user.id, request.params.id);
+  if (!record) {
+    response.status(404).json({ message: "No capture image uploaded yet." });
+    return;
+  }
+
+  const blob = await downloadAssignmentCaptureFromBlob(record.blobName);
+  if (!blob?.stream) {
+    response.status(404).json({ message: "Capture image is missing from storage." });
+    return;
+  }
+
+  response.setHeader("Content-Type", record.contentType || "image/jpeg");
   response.setHeader("Content-Length", String(blob.contentLength || record.size));
   response.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(record.fileName)}"`);
   blob.stream.pipe(response);

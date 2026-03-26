@@ -25,6 +25,23 @@ const createBlobName = (userId, assignmentId, originalFileName) => {
   return `${safeUser}/${safeAssignment}/${now}-${safeFile}.pdf`;
 };
 
+const fileExtensionFromContentType = (contentType = "") => {
+  const normalized = String(contentType || "").toLowerCase();
+  if (normalized === "image/png") return "png";
+  if (normalized === "image/webp") return "webp";
+  if (normalized === "image/gif") return "gif";
+  return "jpg";
+};
+
+const createCaptureBlobName = (userId, assignmentId, originalFileName, contentType) => {
+  const safeUser = sanitize(userId, "user");
+  const safeAssignment = sanitize(assignmentId, "assignment");
+  const safeFile = sanitize(originalFileName, "problem-capture");
+  const extension = fileExtensionFromContentType(contentType);
+  const now = Date.now();
+  return `${safeUser}/${safeAssignment}/capture/${now}-${safeFile}.${extension}`;
+};
+
 const createSceneBlobName = (userId, assignmentId, problemIndex) => {
   const safeUser = sanitize(userId, "user");
   const safeAssignment = sanitize(assignmentId, "assignment");
@@ -82,6 +99,24 @@ export const uploadAssignmentPdfToBlob = async ({ userId, assignmentId, fileName
   return blobName;
 };
 
+export const uploadAssignmentCaptureToBlob = async ({
+  userId,
+  assignmentId,
+  fileName,
+  contentType,
+  buffer,
+}) => {
+  const container = await requireContainer();
+  const blobName = createCaptureBlobName(userId, assignmentId, fileName, contentType);
+  const blobClient = container.getBlockBlobClient(blobName);
+  await blobClient.uploadData(buffer, {
+    blobHTTPHeaders: {
+      blobContentType: contentType || "image/jpeg",
+    },
+  });
+  return blobName;
+};
+
 export const deleteBlobIfExists = async (blobName) => {
   if (!blobName) return;
   const container = await requireContainer();
@@ -99,6 +134,20 @@ export const downloadAssignmentPdfFromBlob = async (blobName) => {
   return {
     stream: response.readableStreamBody,
     contentType: response.contentType || "application/pdf",
+    contentLength: Number(response.contentLength || 0),
+  };
+};
+
+export const downloadAssignmentCaptureFromBlob = async (blobName) => {
+  const container = await requireContainer();
+  const blobClient = container.getBlobClient(blobName);
+  const exists = await blobClient.exists();
+  if (!exists) return null;
+
+  const response = await blobClient.download();
+  return {
+    stream: response.readableStreamBody,
+    contentType: response.contentType || "image/jpeg",
     contentLength: Number(response.contentLength || 0),
   };
 };

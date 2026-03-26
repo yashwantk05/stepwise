@@ -127,6 +127,19 @@ export const initDb = async () => {
     `);
 
     await activePool.query(`
+      CREATE TABLE IF NOT EXISTS assignment_capture_images (
+        assignment_id TEXT PRIMARY KEY REFERENCES assignments(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+        blob_name TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        size BIGINT NOT NULL,
+        uploaded_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      );
+    `);
+
+    await activePool.query(`
       CREATE TABLE IF NOT EXISTS problem_images (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
@@ -519,6 +532,17 @@ const mapAssignmentPdf = (row) => ({
   updatedAt: Number(row.updated_at),
 });
 
+const mapAssignmentCaptureImage = (row) => ({
+  assignmentId: row.assignment_id,
+  userId: row.user_id,
+  blobName: row.blob_name,
+  fileName: row.file_name,
+  contentType: row.content_type,
+  size: Number(row.size),
+  uploadedAt: Number(row.uploaded_at),
+  updatedAt: Number(row.updated_at),
+});
+
 export const getAssignmentPdfByAssignmentId = async (userId, assignmentId) => {
   const { rows } = await getPool().query(
     `
@@ -532,6 +556,21 @@ export const getAssignmentPdfByAssignmentId = async (userId, assignmentId) => {
 
   if (rows.length === 0) return null;
   return mapAssignmentPdf(rows[0]);
+};
+
+export const getAssignmentCaptureImageByAssignmentId = async (userId, assignmentId) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT assignment_id, user_id, blob_name, file_name, content_type, size, uploaded_at, updated_at
+      FROM assignment_capture_images
+      WHERE user_id = $1 AND assignment_id = $2
+      LIMIT 1;
+    `,
+    [userId, assignmentId],
+  );
+
+  if (rows.length === 0) return null;
+  return mapAssignmentCaptureImage(rows[0]);
 };
 
 export const upsertAssignmentPdf = async ({
@@ -565,6 +604,37 @@ export const upsertAssignmentPdf = async ({
   return mapAssignmentPdf(rows[0]);
 };
 
+export const upsertAssignmentCaptureImage = async ({
+  assignmentId,
+  userId,
+  blobName,
+  fileName,
+  contentType,
+  size,
+}) => {
+  const now = Date.now();
+  const { rows } = await getPool().query(
+    `
+      INSERT INTO assignment_capture_images (
+        assignment_id, user_id, blob_name, file_name, content_type, size, uploaded_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+      ON CONFLICT (assignment_id)
+      DO UPDATE SET
+        user_id = EXCLUDED.user_id,
+        blob_name = EXCLUDED.blob_name,
+        file_name = EXCLUDED.file_name,
+        content_type = EXCLUDED.content_type,
+        size = EXCLUDED.size,
+        uploaded_at = EXCLUDED.uploaded_at,
+        updated_at = EXCLUDED.updated_at
+      RETURNING assignment_id, user_id, blob_name, file_name, content_type, size, uploaded_at, updated_at;
+    `,
+    [assignmentId, userId, blobName, fileName, contentType, size, now],
+  );
+  return mapAssignmentCaptureImage(rows[0]);
+};
+
 export const removeAssignmentPdf = async (userId, assignmentId) => {
   const { rows } = await getPool().query(
     `
@@ -578,6 +648,19 @@ export const removeAssignmentPdf = async (userId, assignmentId) => {
   return mapAssignmentPdf(rows[0]);
 };
 
+export const removeAssignmentCaptureImage = async (userId, assignmentId) => {
+  const { rows } = await getPool().query(
+    `
+      DELETE FROM assignment_capture_images
+      WHERE user_id = $1 AND assignment_id = $2
+      RETURNING assignment_id, user_id, blob_name, file_name, content_type, size, uploaded_at, updated_at;
+    `,
+    [userId, assignmentId],
+  );
+  if (rows.length === 0) return null;
+  return mapAssignmentCaptureImage(rows[0]);
+};
+
 export const listAssignmentPdfsForUser = async (userId) => {
   const { rows } = await getPool().query(
     `
@@ -588,6 +671,18 @@ export const listAssignmentPdfsForUser = async (userId) => {
     [userId],
   );
   return rows.map(mapAssignmentPdf);
+};
+
+export const listAssignmentCaptureImagesForUser = async (userId) => {
+  const { rows } = await getPool().query(
+    `
+      SELECT assignment_id, user_id, blob_name, file_name, content_type, size, uploaded_at, updated_at
+      FROM assignment_capture_images
+      WHERE user_id = $1;
+    `,
+    [userId],
+  );
+  return rows.map(mapAssignmentCaptureImage);
 };
 
 export const getScene = async (userId, assignmentId, problemIndex) => {

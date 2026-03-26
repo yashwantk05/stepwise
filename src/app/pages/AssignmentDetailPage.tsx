@@ -5,16 +5,22 @@ import {
   addProblemToAssignment,
   deleteProblemFromAssignment,
   deleteAssignmentPdf,
+  deleteAssignmentCaptureImage,
+  getAssignmentCaptureImage,
+  getAssignmentCaptureImageDownloadUrl,
   getAssignmentPdf,
   getAssignmentPdfDownloadUrl,
   listAssignmentProblems,
   renameAssignmentProblem,
   saveAssignmentPdf,
+  saveAssignmentCaptureImage,
 } from '../services/storage';
 
 const MIN_PROBLEM_COUNT = 1;
 const MAX_PROBLEM_COUNT = 60;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
+const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
+const CAPTURE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
 const normalizeProblemCount = (value: number) => {
   const parsed = Number(value);
@@ -36,6 +42,7 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
   const [subject, setSubject] = useState<any>(null);
   const [assignment, setAssignment] = useState<any>(null);
   const [fileRecord, setFileRecord] = useState<any>(null);
+  const [captureRecord, setCaptureRecord] = useState<any>(null);
   const [problemTitles, setProblemTitles] = useState<Record<number, string>>({});
   const [status, setStatus] = useState('Loading assignment...');
   const [loading, setLoading] = useState(false);
@@ -59,6 +66,8 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
       setAssignment(assignmentData);
       setSubject(subjectData || { id: subjectId, name: "Subject" });
       setFileRecord(fileData || null);
+      const captureData = await getAssignmentCaptureImage(assignmentId).catch(() => null);
+      setCaptureRecord(captureData || null);
       setStatus('Assignment loaded.');
 
       try {
@@ -178,6 +187,56 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
     }
   };
 
+  const handleCaptureUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    if (!CAPTURE_TYPES.includes(file.type)) {
+      setStatus('Please upload PNG, JPEG, or WEBP image.');
+      return;
+    }
+
+    if (file.size > MAX_CAPTURE_BYTES) {
+      setStatus('Image exceeds the 8MB upload limit.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await saveAssignmentCaptureImage(assignmentId, file);
+      setStatus(`Uploaded ${file.name} to image/capture.`);
+      const nextRecord = await getAssignmentCaptureImage(assignmentId);
+      setCaptureRecord(nextRecord || null);
+    } catch (error) {
+      setStatus((error as Error)?.message || 'Unable to upload capture image.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenCapture = async () => {
+    try {
+      const url = await getAssignmentCaptureImageDownloadUrl(assignmentId);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setStatus((error as Error)?.message || 'Unable to open capture image.');
+    }
+  };
+
+  const handleRemoveCapture = async () => {
+    setLoading(true);
+    try {
+      await deleteAssignmentCaptureImage(assignmentId);
+      setCaptureRecord(null);
+      setStatus('Removed image/capture upload.');
+    } catch (error) {
+      setStatus((error as Error)?.message || 'Unable to remove capture image.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRemovePdf = async () => {
     setLoading(true);
     try {
@@ -246,6 +305,34 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
           <p className="text-muted text-sm">No PDF uploaded yet.</p>
         )}
         <p className="form-help">{status}</p>
+        <hr style={{ margin: '12px 0 10px' }} />
+        <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>Image/Capture Channel</h3>
+        <div className="form-row">
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            capture="environment"
+            onChange={handleCaptureUpload}
+            disabled={loading}
+          />
+          {captureRecord && (
+            <>
+              <button type="button" className="btn-secondary" onClick={handleOpenCapture} disabled={loading}>
+                Open Capture
+              </button>
+              <button type="button" className="btn-danger" onClick={handleRemoveCapture} disabled={loading}>
+                Remove Capture
+              </button>
+            </>
+          )}
+        </div>
+        {captureRecord ? (
+          <p className="text-muted text-sm">
+            {captureRecord.fileName} ({Math.round(captureRecord.size / 1024)} KB)
+          </p>
+        ) : (
+          <p className="text-muted text-sm">No image/capture uploaded yet.</p>
+        )}
       </div>
 
       <div className="form-section mb-3">

@@ -7,7 +7,9 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@excalidraw/excalidraw/index.css";
 import { analyzeDrawing, isDebugImagesEnabled } from "../services/ai";
 import {
+  downloadAssignmentCaptureImageBlob,
   getAssignmentById,
+  getAssignmentCaptureImage,
   getProblemContext,
   getProblemImage,
   getProblemScene,
@@ -31,10 +33,14 @@ const PROBLEM_CROP_SCALE = 2;
 const MAX_HINT_ITEMS = 3;
 const MAX_ERROR_ITEMS = 3;
 const MAX_SELECTION_INSIGHT_ITEMS = 1;
+const SIDEBAR_COLLAPSED_BREAKPOINT = Number.MAX_SAFE_INTEGER;
 
 const getDefaultScene = () => ({
   elements: [],
-  appState: { viewBackgroundColor: "#f8fafc" },
+  appState: {
+    viewBackgroundColor: "#f8fafc",
+    defaultSidebarDockedPreference: false,
+  },
   files: {},
 });
 
@@ -280,10 +286,11 @@ const getPersistedScene = (scene: any) => {
     typeof scene?.appState?.viewBackgroundColor === "string"
       ? scene.appState.viewBackgroundColor
       : "#f8fafc";
+  const defaultSidebarDockedPreference = false;
 
   return {
     elements: normalizedElements,
-    appState: { viewBackgroundColor },
+    appState: { viewBackgroundColor, defaultSidebarDockedPreference },
     files: normalizedFiles,
   };
 };
@@ -403,12 +410,16 @@ interface ProblemBoardPageProps {
   onBack: () => void;
 }
 
+type PickerSource = "pdf" | "capture";
+
 export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: ProblemBoardPageProps) {
   const [assignment, setAssignment] = useState<any>(null);
   const [status, setStatus] = useState("Loading whiteboard...");
   const [, setHint] = useState("Start drawing to receive hints.");
   const [initialScene, setInitialScene] = useState(getDefaultScene());
   const latestSceneRef = useRef(getDefaultScene());
+  const excalidrawApiRef = useRef<{ refresh: () => void } | null>(null);
+  const excalidrawRefreshRafRef = useRef<number | null>(null);
   const persistedInsights = useMemo(
     () => parseInsightsForProblem(assignment, problemIndex),
     [assignment, problemIndex],
@@ -448,6 +459,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const [isSavingAnswerKey, setIsSavingAnswerKey] = useState(false);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [pickerStatus, setPickerStatus] = useState("");
+  const [pickerSource, setPickerSource] = useState<PickerSource>("pdf");
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [selectedPage, setSelectedPage] = useState(1);
   const [pageImageUrl, setPageImageUrl] = useState("");
@@ -537,6 +549,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const closePicker = useCallback(() => {
     setIsPickerOpen(false);
     setPickerStatus("");
+    setPickerSource("pdf");
     setPdfPageCount(0);
     setSelectedPage(1);
     setSelectionRect(null);
@@ -727,6 +740,30 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     }, 3000);
   }, [analyzeSceneForHint]);
 
+  const scheduleExcalidrawRefresh = useCallback(() => {
+    if (!excalidrawApiRef.current?.refresh) return;
+    if (excalidrawRefreshRafRef.current != null) {
+      cancelAnimationFrame(excalidrawRefreshRafRef.current);
+    }
+    excalidrawRefreshRafRef.current = requestAnimationFrame(() => {
+      excalidrawApiRef.current?.refresh();
+    });
+  }, []);
+
+  // Excalidraw caches container bounds for pointer coordinate mapping.
+  // When AI UI updates cause a reflow, those cached bounds can get stale,
+  // leading to a visible cursor offset while drawing. Refreshing fixes it
+  // without remounting Excalidraw (so the user's drawing stays intact).
+  useEffect(() => {
+    scheduleExcalidrawRefresh();
+  }, [scheduleExcalidrawRefresh, hintInsights.length, wrongInsights.length, selectionMode, status]);
+
+  useEffect(() => {
+    const handleWindowResize = () => scheduleExcalidrawRefresh();
+    window.addEventListener("resize", handleWindowResize);
+    return () => window.removeEventListener("resize", handleWindowResize);
+  }, [scheduleExcalidrawRefresh]);
+
   useEffect(
     () => () => {
       if (analyzeTimerRef.current) {
@@ -758,18 +795,43 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
   const handleOpenPicker = async () => {
     setIsPickerOpen(true);
-    setPickerStatus("Loading PDF...");
+    setPickerStatus("Loading assignment upload...");
     try {
       const pdfBlob = await downloadAssignmentPdfBlob(assignmentId);
       const bytes = await pdfBlob.arrayBuffer();
       const loadingTask = getDocument({ data: new Uint8Array(bytes) });
       const pdfDocument = await loadingTask.promise;
       pdfDocumentRef.current = pdfDocument;
+      setPickerSource("pdf");
       setPdfPageCount(pdfDocument.numPages);
       setSelectedPage(1);
       await renderSelectedPage(pdfDocument, 1);
+      return;
     } catch {
-      setPickerStatus("Unable to open PDF. Upload a PDF first.");
+      // Fall through to capture mode.
+    }
+
+    try {
+      const capture = await getAssignmentCaptureImage(assignmentId);
+      if (!capture) {
+        setPickerStatus("Unable to open source. Upload a PDF or image/capture first.");
+        return;
+      }
+      const captureBlob = await downloadAssignmentCaptureImageBlob(assignmentId);
+      const objectUrl = URL.createObjectURL(captureBlob);
+      if (pageImageUrlRef.current) {
+        URL.revokeObjectURL(pageImageUrlRef.current);
+      }
+      pageImageUrlRef.current = objectUrl;
+      setPickerSource("capture");
+      setPdfPageCount(1);
+      setSelectedPage(1);
+      setPageImageUrl(objectUrl);
+      setSelectionRect(null);
+      setIsSelecting(false);
+      setPickerStatus("Capture image ready. Drag on the image to select a crop area.");
+    } catch {
+      setPickerStatus("Unable to open source. Upload a PDF or image/capture first.");
     }
   };
 
@@ -788,6 +850,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   };
 
   const handlePageChange = async (value: string) => {
+    if (pickerSource !== "pdf") return;
     const nextPage = clamp(Number(value) || 1, 1, pdfPageCount || 1);
     setSelectedPage(nextPage);
     if (pdfDocumentRef.current) {
@@ -1151,7 +1214,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         <h2>Problem Image</h2>
         <div className="control-row">
           <button type="button" onClick={handleOpenPicker}>
-            Replace from PDF
+            Replace from Upload
           </button>
           {problemImageMeta && (
             <>
@@ -1182,17 +1245,21 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           <button
             type="button"
             className="style-panel-toggle"
-            onClick={() => setIsStylePanelOpen((prev) => !prev)}
+            onClick={() => setIsStylePanelOpen((current) => !current)}
+            aria-expanded={isStylePanelOpen}
           >
-            {isStylePanelOpen ? "Hide" : "Show"} Tools
+            Styles {isStylePanelOpen ? "v" : ">"}
           </button>
-
           <Excalidraw
             key={sceneRevision}
             initialData={initialScene}
             onChange={handleChange}
+            excalidrawAPI={(api) => {
+              excalidrawApiRef.current = { refresh: api.refresh.bind(api) };
+            }}
             detectScroll={true}
             UIOptions={{
+              dockedSidebarBreakpoint: SIDEBAR_COLLAPSED_BREAKPOINT,
               canvasActions: {
                 saveAsImage: false,
               },
@@ -1326,23 +1393,25 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       {isPickerOpen && (
         <div className="modal-overlay" onClick={closePicker}>
           <div className="panel picker-panel" onClick={(e) => e.stopPropagation()}>
-            <h2>Select Problem from PDF</h2>
+            <h2>{pickerSource === "pdf" ? "Select Problem from PDF" : "Select Problem from Capture"}</h2>
             <p className="subtle">{pickerStatus}</p>
 
-            <div className="control-row">
-              <label className="picker-label">
-                Page:
-                <input
-                  type="number"
-                  min={1}
-                  max={pdfPageCount || 1}
-                  value={selectedPage}
-                  onChange={(e) => void handlePageChange(e.target.value)}
-                  disabled={isRenderingPage}
-                />
-              </label>
-              <span className="subtle">of {pdfPageCount}</span>
-            </div>
+            {pickerSource === "pdf" && (
+              <div className="control-row">
+                <label className="picker-label">
+                  Page:
+                  <input
+                    type="number"
+                    min={1}
+                    max={pdfPageCount || 1}
+                    value={selectedPage}
+                    onChange={(e) => void handlePageChange(e.target.value)}
+                    disabled={isRenderingPage}
+                  />
+                </label>
+                <span className="subtle">of {pdfPageCount}</span>
+              </div>
+            )}
 
             {pageImageUrl && (
               <div className="picker-crop-shell">
@@ -1357,7 +1426,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                   <img
                     ref={cropImageRef}
                     src={pageImageUrl}
-                    alt={`Page ${selectedPage}`}
+                    alt={pickerSource === "pdf" ? `Page ${selectedPage}` : "Captured assignment"}
                     className="picker-crop-image"
                     draggable={false}
                     onDragStart={(event) => event.preventDefault()}

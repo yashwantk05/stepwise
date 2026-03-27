@@ -9,7 +9,6 @@ import {
   Mic,
   Plus,
   Search,
-  Share2,
   Upload,
 } from 'lucide-react';
 import {
@@ -228,19 +227,6 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleShareNote = async () => {
-    if (!selectedNote) return;
-
-    const shareText = `${editorTitle}\n\n${editorContent}`.trim();
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(shareText);
-      window.alert('Note copied to clipboard.');
-      return;
-    }
-
-    window.alert('Clipboard sharing is not available in this browser.');
   };
 
   const handleInsightTabChange = async (tab: 'notes' | 'summary' | 'formulas' | 'mistakes') => {
@@ -576,10 +562,6 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
                     <div className="notes-editor-actions">
                       <button type="button" className="btn-secondary btn-sm" onClick={() => void handleSaveNote()}>
                         Save
-                      </button>
-                      <button type="button" className="btn-secondary btn-sm" onClick={() => void handleShareNote()}>
-                        <Share2 size={14} />
-                        Share
                       </button>
                       <button type="button" className="btn-danger btn-sm" onClick={() => void handleDeleteNote()}>
                         Delete

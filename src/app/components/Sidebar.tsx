@@ -84,19 +84,19 @@ export function Sidebar({
         </button>
 
         <button
-          className={`nav-item ${currentPage === 'settings' ? 'active' : ''}`}
-          onClick={() => handleNavigate('settings')}
-        >
-          <span className="nav-icon"><Settings size={20} /></span>
-          <span className="nav-label">Accessibility</span>
-        </button>
-
-        <button
           className={`nav-item ${currentPage === 'study-tools' ? 'active' : ''}`}
           onClick={() => handleNavigate('study-tools')}
         >
           <span className="nav-icon"><Shapes size={20} /></span>
           <span className="nav-label">Study Tools</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'settings' ? 'active' : ''}`}
+          onClick={() => handleNavigate('settings')}
+        >
+          <span className="nav-icon"><Settings size={20} /></span>
+          <span className="nav-label">Accessibility</span>
         </button>
       </nav>
     </div>

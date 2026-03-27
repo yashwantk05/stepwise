@@ -2,9 +2,61 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus, MessageSquarePlus, PanelLeft, Trash2 } from 'lucide-react';
 import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
+import { registerGlobalAudioStopHandler, setGlobalAudioSourceActive } from '../services/audioControl';
 import { getUserSettings, listSubjects } from '../services/storage';
 import { createSocraticThread, deleteSocraticThread, getSpeechToken, getSocraticChatHistory, getSocraticThreadMessages, sendSocraticChat } from '../services/studyTools';
 import * as speechSdk from 'microsoft-cognitiveservices-speech-sdk';
+
+type TutorId = 'vaani' | 'saarthi';
+
+const THREAD_TUTOR_MAP_KEY = 'stepwise_socratic_thread_tutors_v1';
+const TUTOR_OPTIONS: Array<{
+  id: TutorId;
+  name: string;
+  avatar: string;
+  title: string;
+  description: string;
+  openingMessage: string;
+}> = [
+  {
+    id: 'vaani',
+    name: 'Vaani',
+    avatar: '👩',
+    title: 'Direct answer tutor',
+    description: 'Gives the answer directly and then explains it in a short, clear way.',
+    openingMessage: 'I am Vaani. Send me your question and I will give you the answer directly with a quick explanation.',
+  },
+  {
+    id: 'saarthi',
+    name: 'Saarthi',
+    avatar: '👨',
+    title: 'Step-by-step guide',
+    description: 'Sticks to the guided Socratic flow and reveals only the steps needed to solve.',
+    openingMessage: 'I am Saarthi. Let us work through this carefully, one step at a time.',
+  },
+];
+
+const tutorMetaById = Object.fromEntries(
+  TUTOR_OPTIONS.map((tutor) => [tutor.id, tutor]),
+) as Record<TutorId, (typeof TUTOR_OPTIONS)[number]>;
+
+const readThreadTutorMap = () => {
+  if (typeof window === 'undefined') return {} as Record<string, TutorId>;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(THREAD_TUTOR_MAP_KEY) || '{}');
+    if (!parsed || typeof parsed !== 'object') return {} as Record<string, TutorId>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, TutorId] => entry[1] === 'vaani' || entry[1] === 'saarthi'),
+    );
+  } catch {
+    return {} as Record<string, TutorId>;
+  }
+};
+
+const writeThreadTutorMap = (map: Record<string, TutorId>) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(THREAD_TUTOR_MAP_KEY, JSON.stringify(map));
+};
 
 // Extend window for mathlive
 declare global {
@@ -96,6 +148,7 @@ interface ChatMessage {
   role: 'assistant' | 'user';
   text: string;
   time: string;
+  tutorId?: TutorId;
   images?: { previewUrl: string }[];
 }
 
@@ -106,30 +159,6 @@ interface ChatThread {
   createdAt: number;
   updatedAt: number;
 }
-
-type TutorMode = 'saarthi' | 'vaani';
-
-const TUTOR_MODE_STORAGE_KEY = 'stepwise.tutorMode';
-const DEFAULT_TUTOR_MODE: TutorMode = 'saarthi';
-
-const getStoredTutorMode = (): TutorMode => {
-  if (typeof window === 'undefined') return DEFAULT_TUTOR_MODE;
-  const value = window.localStorage.getItem(TUTOR_MODE_STORAGE_KEY);
-  return value === 'vaani' ? 'vaani' : DEFAULT_TUTOR_MODE;
-};
-
-const getTutorProfile = (mode: TutorMode) =>
-  mode === 'vaani'
-    ? {
-      title: 'Vaani Tutor',
-      subtitle: 'Direct tutor',
-      introMessage: 'Tell me what you need. I’ll explain it directly and clearly.',
-    }
-    : {
-      title: 'Saarthi Tutor',
-      subtitle: 'Socratic tutor',
-      introMessage: 'Want to understand this better? Let’s work through it step by step.',
-    };
 
 const extractTopicFromText = (text: string, notebookOptions: string[]) => {
   const lowered = text.toLowerCase();
@@ -165,20 +194,19 @@ const formatChatTime = (createdAt?: number) => {
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-const buildInitialAssistantMessage = (mode: TutorMode): ChatMessage => ({
-  id: 'assistant-initial',
+const createInitialAssistantMessage = (tutorId: TutorId): ChatMessage => ({
+  id: `assistant-initial-${tutorId}`,
   role: 'assistant',
-  text: getTutorProfile(mode).introMessage,
+  tutorId,
+  text: tutorMetaById[tutorId].openingMessage,
   time: formatChatTime(Date.now()),
 });
-
 
 export function SocraticTutorPage({
   initialContext,
 }: {
   initialContext?: Partial<TutorContextState>;
 }) {
-  const [tutorMode, setTutorMode] = useState<TutorMode>(() => getStoredTutorMode());
   const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
   const [context, setContext] = useState<TutorContextState>({
     topic: initialContext?.topic || '',
@@ -191,6 +219,8 @@ export function SocraticTutorPage({
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedTutorId, setSelectedTutorId] = useState<TutorId>('saarthi');
+  const [threadTutorMap, setThreadTutorMap] = useState<Record<string, TutorId>>(() => readThreadTutorMap());
   const [draft, setDraft] = useState('');
   const [activeMode, setActiveMode] = useState<'voice' | 'image' | 'equation' | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -209,13 +239,15 @@ export function SocraticTutorPage({
   const speechSessionRef = useRef(0);
   const audioChunksRef = useRef<Blob[]>([]);
   const [isRecording, setIsRecording] = useState(false);
-  const initialTutorModeRef = useRef<TutorMode>(tutorMode);
-  const tutorProfile = useMemo(() => getTutorProfile(tutorMode), [tutorMode]);
+  const selectedTutor = tutorMetaById[selectedTutorId];
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(TUTOR_MODE_STORAGE_KEY, tutorMode);
-  }, [tutorMode]);
+  const updateThreadTutor = useCallback((threadId: string, tutorId: TutorId) => {
+    setThreadTutorMap((current) => {
+      const next = { ...current, [threadId]: tutorId };
+      writeThreadTutorMap(next);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     listSubjects().then((rows) => setSubjects(rows as SubjectRecord[])).catch(() => {});
@@ -240,11 +272,11 @@ export function SocraticTutorPage({
           setActiveThreadId((current) => current || loaded[0].id);
           return;
         }
-        setMessages((current) => (current.length > 0 ? current : [buildInitialAssistantMessage(initialTutorModeRef.current)]));
+        setMessages((current) => (current.length > 0 ? current : [createInitialAssistantMessage('saarthi')]));
       })
       .catch(() => {
         if (!mounted) return;
-        setMessages((current) => (current.length > 0 ? current : [buildInitialAssistantMessage(initialTutorModeRef.current)]));
+        setMessages((current) => (current.length > 0 ? current : [createInitialAssistantMessage('saarthi')]));
       });
 
     return () => {
@@ -254,7 +286,13 @@ export function SocraticTutorPage({
 
   useEffect(() => {
     if (!activeThreadId) return;
+    setSelectedTutorId(threadTutorMap[activeThreadId] || 'saarthi');
+  }, [activeThreadId, threadTutorMap]);
+
+  useEffect(() => {
+    if (!activeThreadId) return;
     let mounted = true;
+    const tutorId = threadTutorMap[activeThreadId] || selectedTutorId;
     getSocraticThreadMessages(activeThreadId, 200)
       .then((payload) => {
         if (!mounted) return;
@@ -264,19 +302,20 @@ export function SocraticTutorPage({
             role: msg.role === 'assistant' ? 'assistant' : 'user',
             text: msg.role === 'assistant' ? formatAssistantReply(msg.text) : String(msg.text || ''),
             time: formatChatTime(msg.createdAt),
+            tutorId: msg.role === 'assistant' ? tutorId : undefined,
           }))
           : [];
-        setMessages(loaded.length > 0 ? loaded : [buildInitialAssistantMessage(initialTutorModeRef.current)]);
+        setMessages(loaded.length > 0 ? loaded : [createInitialAssistantMessage(tutorId)]);
       })
       .catch(() => {
         if (!mounted) return;
-        setMessages([buildInitialAssistantMessage(initialTutorModeRef.current)]);
+        setMessages([createInitialAssistantMessage(tutorId)]);
       });
 
     return () => {
       mounted = false;
     };
-  }, [activeThreadId]);
+  }, [activeThreadId, selectedTutorId, threadTutorMap]);
 
   const notebookOptions = useMemo(() => subjects.map((subject) => subject.name), [subjects]);
   
@@ -326,6 +365,7 @@ export function SocraticTutorPage({
     }
     playingAssistantMessageIdRef.current = null;
     setPlayingAssistantMessageId(null);
+    setGlobalAudioSourceActive('socratic', false);
   }, []);
 
   const speakAssistantReply = useCallback(async (messageId: string, text: string) => {
@@ -337,13 +377,15 @@ export function SocraticTutorPage({
     speechSessionRef.current = sessionId;
     playingAssistantMessageIdRef.current = messageId;
     setPlayingAssistantMessageId(messageId);
+    setGlobalAudioSourceActive('socratic', true);
     let azureSpeakAttempted = false;
 
     try {
       const { token, region } = await getSpeechToken();
       if (speechSessionRef.current !== sessionId) return;
       const speechConfig = speechSdk.SpeechConfig.fromAuthorizationToken(token, region);
-      speechConfig.speechSynthesisVoiceName = 'en-US-AriaNeural';
+      speechConfig.speechSynthesisVoiceName =
+        selectedTutorId === 'vaani' ? 'en-US-JennyNeural' : 'en-US-GuyNeural';
       const player = new speechSdk.SpeakerAudioDestination();
       player.onAudioEnd = () => {
         if (speechPlayerRef.current === player) {
@@ -352,6 +394,7 @@ export function SocraticTutorPage({
         if (speechSessionRef.current === sessionId) {
           playingAssistantMessageIdRef.current = null;
           setPlayingAssistantMessageId(null);
+          setGlobalAudioSourceActive('socratic', false);
         }
       };
       speechPlayerRef.current = player;
@@ -395,6 +438,7 @@ export function SocraticTutorPage({
       if (azureSpeakAttempted) {
         playingAssistantMessageIdRef.current = null;
         setPlayingAssistantMessageId(null);
+        setGlobalAudioSourceActive('socratic', false);
         return;
       }
       console.warn('Azure TTS unavailable, falling back to browser speech.', error);
@@ -404,6 +448,7 @@ export function SocraticTutorPage({
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
       playingAssistantMessageIdRef.current = null;
       setPlayingAssistantMessageId(null);
+      setGlobalAudioSourceActive('socratic', false);
       return;
     }
 
@@ -413,16 +458,20 @@ export function SocraticTutorPage({
       if (speechSessionRef.current === sessionId) {
         playingAssistantMessageIdRef.current = null;
         setPlayingAssistantMessageId(null);
+        setGlobalAudioSourceActive('socratic', false);
       }
     };
     utterance.onerror = () => {
       if (speechSessionRef.current === sessionId) {
         playingAssistantMessageIdRef.current = null;
         setPlayingAssistantMessageId(null);
+        setGlobalAudioSourceActive('socratic', false);
       }
     };
     window.speechSynthesis.speak(utterance);
-  }, [stopAssistantSpeech]);
+  }, [selectedTutorId, stopAssistantSpeech]);
+
+  useEffect(() => registerGlobalAudioStopHandler(stopAssistantSpeech), [stopAssistantSpeech]);
 
   useEffect(() => () => {
     stopAssistantSpeech();
@@ -528,6 +577,7 @@ export function SocraticTutorPage({
         const titleSeed = trimmed || 'New chat';
         const createdThread = await createSocraticThread(titleSeed.slice(0, 120));
         threadId = createdThread.id;
+        updateThreadTutor(createdThread.id, selectedTutorId);
         setThreads((current) => [createdThread, ...current.filter((item) => item.id !== createdThread.id)]);
         setActiveThreadId(createdThread.id);
       }
@@ -537,11 +587,12 @@ export function SocraticTutorPage({
       const response = await sendSocraticChat(trimmed, history, {
         threadId,
         classLevel: selectedClassLevel || undefined,
-        tutorMode,
+        tutorMode: selectedTutorId,
         audioBase64,
         images: imagePayloads.length > 0 ? imagePayloads : undefined,
         context: {
           topic: nextContext.topic,
+          tutorId: selectedTutorId,
         }
       });
 
@@ -550,6 +601,7 @@ export function SocraticTutorPage({
         {
           id: `assistant-${Date.now() + 1}`,
           role: 'assistant',
+          tutorId: selectedTutorId,
           text: formatAssistantReply(response.reply) + (response.usedNotes ? '\n\n(Based on your notes)' : ''),
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
@@ -582,17 +634,18 @@ export function SocraticTutorPage({
     } finally {
       setIsLoading(false);
     }
-  }, [context, draft, attachedImages, notebookOptions, isLoading, messages, tutorMode]);
+  }, [activeThreadId, attachedImages, context, draft, isLoading, messages, notebookOptions, selectedTutorId, updateThreadTutor]);
 
   const handleNewChat = useCallback(async () => {
     setDraft('');
     setAttachedImages([]);
     stopAssistantSpeech();
     const thread = await createSocraticThread('New chat');
+    updateThreadTutor(thread.id, selectedTutorId);
     setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)]);
     setActiveThreadId(thread.id);
-    setMessages([buildInitialAssistantMessage(tutorMode)]);
-  }, [stopAssistantSpeech, tutorMode]);
+    setMessages([createInitialAssistantMessage(selectedTutorId)]);
+  }, [selectedTutorId, stopAssistantSpeech, updateThreadTutor]);
 
   const handleToggleAssistantMessageAudio = useCallback((messageId: string, text: string) => {
     if (playingAssistantMessageIdRef.current === messageId) {
@@ -609,16 +662,22 @@ export function SocraticTutorPage({
         ? (threads.find((item) => item.id !== threadId)?.id || null)
         : activeThreadId;
       setThreads((current) => current.filter((item) => item.id !== threadId));
+      setThreadTutorMap((current) => {
+        const next = { ...current };
+        delete next[threadId];
+        writeThreadTutorMap(next);
+        return next;
+      });
       if (activeThreadId === threadId) {
         setActiveThreadId(fallbackThreadId);
         if (!fallbackThreadId) {
-          setMessages([buildInitialAssistantMessage(tutorMode)]);
+          setMessages([createInitialAssistantMessage(selectedTutorId)]);
         }
       }
     } catch {
       // Keep UI unchanged when delete fails.
     }
-  }, [activeThreadId, threads, tutorMode]);
+  }, [activeThreadId, selectedTutorId, threads]);
 
   const stopRecording = useCallback(() => {
     setIsRecording(false);
@@ -716,44 +775,58 @@ export function SocraticTutorPage({
               <PanelLeft size={16} />
             </button>
             <div>
-              <h1>{tutorProfile.title}</h1>
-              <p>{tutorProfile.subtitle}</p>
+              <h1>Your Tutors</h1>
+              <p>{selectedTutor.name} is ready to help with {selectedTutor.title.toLowerCase()}.</p>
             </div>
           </div>
         </div>
-        <div className="socratic-topbar-controls">
-          <div className="socratic-tutor-toggle" role="group" aria-label="Tutor mode">
-            <button
-              type="button"
-              className={`socratic-tutor-toggle-btn ${tutorMode === 'saarthi' ? 'active' : ''}`}
-              onClick={() => setTutorMode('saarthi')}
-              aria-pressed={tutorMode === 'saarthi'}
-            >
-              Saarthi
-            </button>
-            <button
-              type="button"
-              className={`socratic-tutor-toggle-btn ${tutorMode === 'vaani' ? 'active' : ''}`}
-              onClick={() => setTutorMode('vaani')}
-              aria-pressed={tutorMode === 'vaani'}
-            >
-              Vaani
-            </button>
-          </div>
-          <button
-            type="button"
-            className={`socratic-panel-toggle ${panelOpen ? 'open' : ''}`}
-            onClick={() => setPanelOpen((v) => !v)}
-          >
-            <span>Topic</span>
-            <ChevronUp size={13} className="socratic-chevron" />
-          </button>
-        </div>
+        <button
+          type="button"
+          className={`socratic-panel-toggle ${panelOpen ? 'open' : ''}`}
+          onClick={() => setPanelOpen((v) => !v)}
+        >
+          <span>Change Tutor</span>
+          <ChevronUp size={13} className="socratic-chevron" />
+        </button>
       </header>
 
       {/* Collapsible context + options panel */}
       <div className={`socratic-context-panel ${panelOpen ? 'open' : ''}`}>
         <div className="socratic-context-grid">
+          <div className="socratic-ctx-box socratic-tutor-box">
+            <span className="socratic-ctx-label">Your Tutors</span>
+            <div className="socratic-tutor-grid">
+              {TUTOR_OPTIONS.map((tutor) => (
+                <button
+                  key={tutor.id}
+                  type="button"
+                  className={`socratic-tutor-card ${selectedTutorId === tutor.id ? 'active' : ''}`}
+                  onClick={() => {
+                    setSelectedTutorId(tutor.id);
+                    if (activeThreadId) {
+                      updateThreadTutor(activeThreadId, tutor.id);
+                      setMessages((current) =>
+                        current.map((message) =>
+                          message.role === 'assistant' ? { ...message, tutorId: tutor.id } : message,
+                        ),
+                      );
+                    } else {
+                      setMessages([createInitialAssistantMessage(tutor.id)]);
+                    }
+                  }}
+                >
+                  <span className={`socratic-tutor-avatar socratic-tutor-avatar-${tutor.id}`} aria-hidden="true">
+                    {tutor.avatar}
+                  </span>
+                  <span className="socratic-tutor-copy">
+                    <strong>{tutor.name}</strong>
+                    <span>{tutor.title}</span>
+                    <small>{tutor.description}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="socratic-ctx-box">
             <span className="socratic-ctx-label">Topic</span>
             <input
@@ -824,7 +897,7 @@ export function SocraticTutorPage({
           <div className="socratic-chat-scroll">
             <SocraticChat
               messages={messages}
-              tutorMode={tutorMode}
+              tutorMode={selectedTutorId}
               playingAssistantMessageId={playingAssistantMessageId}
               onToggleAssistantMessageAudio={handleToggleAssistantMessageAudio}
             />

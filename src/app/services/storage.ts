@@ -19,6 +19,7 @@ export interface UserSettings {
   classLevel: number | null;
   textToSpeechEnabled: boolean;
   speechRate: number;
+  appLanguage: string;
   dyslexiaFriendlyFont: boolean;
   highContrastMode: boolean;
   largeUiMode: boolean;
@@ -48,6 +49,16 @@ interface Assignment {
 interface AssignmentProblem {
   problemIndex: number;
   title: string;
+}
+
+interface AssignmentProblemDetection {
+  label: string;
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
 }
 
 interface ProblemProgressRecord {
@@ -300,10 +311,16 @@ const parseColorTheme = (value: unknown): UserSettings["colorTheme"] => {
   return "default";
 };
 
+const parseAppLanguage = (value: unknown) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || "en";
+};
+
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   classLevel: null,
   textToSpeechEnabled: false,
   speechRate: 50,
+  appLanguage: "en",
   dyslexiaFriendlyFont: false,
   highContrastMode: false,
   largeUiMode: false,
@@ -323,6 +340,7 @@ export const getUserSettings = (userId?: string): UserSettings => {
     classLevel: parseClassLevel(stored.classLevel),
     textToSpeechEnabled: parseBoolean(stored.textToSpeechEnabled, DEFAULT_USER_SETTINGS.textToSpeechEnabled),
     speechRate: clampNumber(stored.speechRate, 0, 100, DEFAULT_USER_SETTINGS.speechRate),
+    appLanguage: parseAppLanguage(stored.appLanguage),
     dyslexiaFriendlyFont: parseBoolean(
       stored.dyslexiaFriendlyFont,
       DEFAULT_USER_SETTINGS.dyslexiaFriendlyFont,
@@ -352,6 +370,10 @@ export const updateUserSettings = (
       updates.speechRate === undefined
         ? current.speechRate
         : clampNumber(updates.speechRate, 0, 100, DEFAULT_USER_SETTINGS.speechRate),
+    appLanguage:
+      updates.appLanguage === undefined
+        ? current.appLanguage
+        : parseAppLanguage(updates.appLanguage),
     dyslexiaFriendlyFont:
       updates.dyslexiaFriendlyFont === undefined
         ? current.dyslexiaFriendlyFont
@@ -873,6 +895,21 @@ export const saveAssignmentCaptureImage = async (assignmentId: string, file: Fil
     method: "POST",
     body: formData,
   });
+};
+
+export const detectAssignmentProblemRegions = async (
+  assignmentId: string,
+  file: File,
+): Promise<AssignmentProblemDetection[]> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const result = (await request(`/assignments/${encodeURIComponent(assignmentId)}/problem-detections`, {
+    method: "POST",
+    body: formData,
+  })) as { problems?: AssignmentProblemDetection[] };
+
+  return Array.isArray(result?.problems) ? result.problems : [];
 };
 
 export const getAssignmentCaptureImage = async (assignmentId: string): Promise<FileRecord | null> => {

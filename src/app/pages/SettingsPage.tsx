@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   AudioLines,
   Check,
+  Languages,
   Eye,
   Palette,
   RotateCcw,
@@ -19,6 +20,10 @@ import {
   applyAccessibilitySettings,
   stopAccessibilitySpeech,
 } from '../services/accessibility';
+import {
+  getLanguageLabel,
+  LANGUAGE_OPTIONS,
+} from '../services/translation';
 
 interface SettingsPageProps {
   user: {
@@ -168,6 +173,45 @@ export function SettingsPage({ user, settings, onSettingsChange }: SettingsPageP
           Adjust audio support, visual readability, and color themes with live controls that
           save to your profile.
         </p>
+      </section>
+
+      <section className="settings-panel">
+        <div className="settings-section-header settings-section-header-visual">
+          <Languages size={20} />
+          <div>
+            <h2>Language & Localization</h2>
+            <p className="settings-section-copy">
+              Translate app text across the interface with Azure-powered multilingual support.
+            </p>
+          </div>
+        </div>
+
+        <div className="settings-option-row">
+          <div className="settings-option-copy">
+            <div className="settings-option-title">
+              <Languages size={18} />
+              <h3>App Language</h3>
+            </div>
+            <p>Choose the language used for labels, buttons, menus, and page copy across Stepwise.</p>
+          </div>
+          <span className="settings-inline-value">{getLanguageLabel(draft.appLanguage)}</span>
+        </div>
+
+        <label className="settings-field-label" htmlFor="app-language-select">
+          Language
+        </label>
+        <select
+          id="app-language-select"
+          className="settings-select"
+          value={draft.appLanguage}
+          onChange={(event) => setField('appLanguage', event.target.value)}
+        >
+          {LANGUAGE_OPTIONS.map((language) => (
+            <option key={language.code} value={language.code}>
+              {language.label}
+            </option>
+          ))}
+        </select>
       </section>
 
       <section className="settings-panel">

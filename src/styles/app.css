@@ -122,14 +122,15 @@ body *:not(code):not(pre):not(svg):not(path) {
 .main-page-logo {
   width: 44px;
   height: 44px;
-  background: linear-gradient(135deg, var(--brand), var(--brand-light));
-  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-weight: 700;
-  font-size: 18px;
+}
+
+.main-page-logo-image {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
 }
 
 .sidebar-toggle-btn {
@@ -1038,6 +1039,18 @@ textarea {
   justify-content: center;
   background: linear-gradient(135deg, #f5f3ff 0%, #faf5ff 100%);
   padding: 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: url("/logo.svg") center / min(130vw, 130vh) no-repeat;
+  opacity: 0.3;
+  filter: grayscale(1);
+  pointer-events: none;
 }
 
 .auth-card {
@@ -1047,20 +1060,23 @@ textarea {
   border-radius: 16px;
   padding: 32px;
   box-shadow: var(--shadow-lg);
+  position: relative;
+  z-index: 1;
 }
 
 .auth-card .logo {
   width: 56px;
   height: 56px;
-  background: linear-gradient(135deg, var(--brand), var(--brand-light));
-  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  font-weight: 700;
-  font-size: 24px;
   margin: 0 auto 20px;
+}
+
+.auth-logo-image {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
 }
 
 .auth-card h1 {
@@ -4199,6 +4215,35 @@ textarea {
   word-break: break-word;
 }
 
+.socratic-bubble-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.socratic-bubble-meta-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.socratic-bubble-time {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.socratic-bubble-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 18px;
+  background: linear-gradient(135deg, #f8fafc, #e2e8f0);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
 .socratic-bubble-play {
   position: absolute;
   top: 10px;
@@ -4234,6 +4279,81 @@ textarea {
 
 .socratic-page-v2 .socratic-bubble-assistant {
   padding-right: 48px;
+}
+
+.socratic-tutor-box {
+  grid-column: 1 / -1;
+}
+
+.socratic-tutor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.socratic-tutor-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+  text-align: left;
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.socratic-tutor-card:hover {
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--line));
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.socratic-tutor-card.active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
+  background: color-mix(in srgb, var(--surface) 84%, #eef4ff);
+}
+
+.socratic-tutor-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+}
+
+.socratic-tutor-avatar-vaani {
+  background: linear-gradient(135deg, #fbcfe8, #ddd6fe);
+}
+
+.socratic-tutor-avatar-saarthi {
+  background: linear-gradient(135deg, #bfdbfe, #99f6e4);
+}
+
+.socratic-tutor-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.socratic-tutor-copy strong {
+  font-size: 1rem;
+}
+
+.socratic-tutor-copy span {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.socratic-tutor-copy small {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 /* Image previews in input bar */
@@ -4343,6 +4463,10 @@ textarea {
   .socratic-context-grid {
     grid-template-columns: minmax(0, 1fr);
     padding: 12px 14px;
+  }
+
+  .socratic-tutor-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .socratic-context-panel.open {
@@ -4894,6 +5018,11 @@ html[data-color-theme="dark"] .settings-status-message {
 
 html[data-color-theme="dark"] .auth-page {
   background: linear-gradient(135deg, #020617 0%, #111827 100%);
+}
+
+html[data-color-theme="dark"] .main-page-logo-image,
+html[data-color-theme="dark"] .auth-logo-image {
+  filter: invert(1);
 }
 
 html[data-color-theme="dark"] .notes-shell {

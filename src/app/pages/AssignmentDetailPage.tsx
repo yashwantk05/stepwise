@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { extractImageText } from '../services/noteUploads';
 import {
   getAssignmentById,
   getSubjectById,
@@ -12,8 +15,10 @@ import {
   getAssignmentPdfDownloadUrl,
   listAssignmentProblems,
   renameAssignmentProblem,
+  detectAssignmentProblemRegions,
   saveAssignmentPdf,
   saveAssignmentCaptureImage,
+  saveProblemImage,
 } from '../services/storage';
 
 const MIN_PROBLEM_COUNT = 1;
@@ -21,6 +26,8 @@ const MAX_PROBLEM_COUNT = 60;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 const CAPTURE_TYPES = ['image/png', 'image/jpeg'];
+
+GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const normalizeProblemCount = (value: number) => {
   const parsed = Number(value);
@@ -30,6 +37,225 @@ const normalizeProblemCount = (value: number) => {
 
 const buildProblemIndexes = (problemCount: number) =>
   Array.from({ length: normalizeProblemCount(problemCount) }, (_value, index) => index + 1);
+
+interface WorksheetPage {
+  file: File;
+  pageText?: string;
+}
+
+const inferProblemCountFromText = (text: string) => {
+  const normalized = String(text || '');
+  if (!normalized.trim()) return 0;
+
+  const numberedMatches = Array.from(
+    normalized.matchAll(/(?:^|\n|\s)(\d{1,2})[\).\:-]\s+/g),
+  ).map((match) => Number(match[1]));
+
+  const uniqueNumbers = Array.from(new Set(numberedMatches.filter((value) => Number.isInteger(value) && value > 0)));
+  if (uniqueNumbers.length >= 2) {
+    return Math.min(MAX_PROBLEM_COUNT, uniqueNumbers.length);
+  }
+
+  const questionMatches = normalized.match(/\b(?:Question|Problem|Q)\s*\d{1,2}\b/gi) || [];
+  return Math.min(MAX_PROBLEM_COUNT, questionMatches.length);
+};
+
+const buildVerticalFallbackDetections = (count: number) => {
+  const safeCount = Math.max(1, Math.min(MAX_PROBLEM_COUNT, count));
+  return Array.from({ length: safeCount }, (_value, index) => {
+    const y = index / safeCount;
+    const nextY = (index + 1) / safeCount;
+    return {
+      label: `Problem ${index + 1}`,
+      bounds: {
+        x: 0.02,
+        y: Math.max(0, y - 0.01),
+        width: 0.96,
+        height: Math.min(1, nextY - y + 0.02),
+      },
+    };
+  });
+};
+
+const buildSequentialProblemDetections = (
+  detections: Array<{
+    label: string;
+    bounds: { x: number; y: number; width: number; height: number };
+  }>,
+) => {
+  if (detections.length <= 1) return detections;
+
+  const sorted = [...detections].sort((left, right) => {
+    if (left.bounds.y !== right.bounds.y) {
+      return left.bounds.y - right.bounds.y;
+    }
+    return left.bounds.x - right.bounds.x;
+  });
+
+  const horizontalMargin = 0.02;
+  const topPadding = 0.005;
+  const bottomPadding = 0.008;
+
+  return sorted.map((detection, index) => {
+    const currentTop = Math.max(0, detection.bounds.y - topPadding);
+    const rawNextTop =
+      index < sorted.length - 1 ? sorted[index + 1].bounds.y - bottomPadding : 1;
+    const nextTop = Math.max(currentTop + 0.03, Math.min(1, rawNextTop));
+    const height = Math.min(1 - currentTop, nextTop - currentTop);
+
+    return {
+      label: detection.label,
+      bounds: {
+        x: horizontalMargin,
+        y: currentTop,
+        width: 1 - horizontalMargin * 2,
+        height,
+      },
+    };
+  });
+};
+
+const cropProblemImage = async (
+  file: File,
+  bounds: { x: number; y: number; width: number; height: number },
+  problemIndex: number,
+) => {
+  const imageUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const nextImage = new Image();
+      nextImage.onload = () => resolve(nextImage);
+      nextImage.onerror = () => reject(new Error('Unable to read worksheet image.'));
+      nextImage.src = imageUrl;
+    });
+
+    const cropX = Math.max(0, Math.round(image.naturalWidth * bounds.x));
+    const cropY = Math.max(0, Math.round(image.naturalHeight * bounds.y));
+    const cropWidth = Math.max(1, Math.round(image.naturalWidth * bounds.width));
+    const cropHeight = Math.max(1, Math.round(image.naturalHeight * bounds.height));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Unable to create crop canvas.');
+    }
+
+    context.drawImage(
+      image,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      cropWidth,
+      cropHeight,
+    );
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) {
+      throw new Error('Unable to export cropped question.');
+    }
+
+    return new File([blob], `problem-${problemIndex}.png`, { type: 'image/png' });
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
+};
+
+const renderPdfToWorksheetPages = async (file: File): Promise<WorksheetPage[]> => {
+  const bytes = await file.arrayBuffer();
+  const loadingTask = getDocument({ data: new Uint8Array(bytes) });
+  const pdf = await loadingTask.promise;
+  const pages: WorksheetPage[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale = Math.min(2.4, 2200 / Math.max(baseViewport.width, 1));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Unable to render PDF page.');
+    }
+
+    await page.render({ canvasContext: context, viewport }).promise;
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) {
+      throw new Error(`Unable to export PDF page ${pageNumber}.`);
+    }
+
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item) => ('str' in item ? String(item.str || '') : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    pages.push({
+      file: new File([blob], `assignment-page-${pageNumber}.png`, { type: 'image/png' }),
+      pageText,
+    });
+  }
+
+  return pages;
+};
+
+const buildDetectedProblemCrops = async (
+  assignmentId: string,
+  worksheetPages: WorksheetPage[],
+) => {
+  const croppedProblems: Array<{ label: string; file: File }> = [];
+
+  for (const worksheetPage of worksheetPages) {
+    const imageFile = worksheetPage.file;
+    let detections: Array<{
+      label: string;
+      bounds: { x: number; y: number; width: number; height: number };
+    }> = [];
+
+    try {
+      detections = await detectAssignmentProblemRegions(assignmentId, imageFile);
+    } catch {
+      detections = [];
+    }
+
+    let effectiveDetections =
+      detections.length > 0
+        ? buildSequentialProblemDetections(detections)
+        : [{ label: 'Problem 1', bounds: { x: 0, y: 0, width: 1, height: 1 } }];
+
+    if (effectiveDetections.length <= 1) {
+      try {
+        const directPageText = String(worksheetPage.pageText || '').trim();
+        const extractedText = directPageText || await extractImageText(imageFile);
+        const inferredCount = inferProblemCountFromText(extractedText);
+        if (inferredCount > effectiveDetections.length) {
+          effectiveDetections = buildVerticalFallbackDetections(inferredCount);
+        }
+      } catch {
+        // Keep detector output when OCR fallback is unavailable.
+      }
+    }
+
+    for (const detection of effectiveDetections) {
+      const problemIndex = croppedProblems.length + 1;
+      const croppedFile = await cropProblemImage(imageFile, detection.bounds, problemIndex);
+      croppedProblems.push({
+        label: detection.label?.trim() || `Problem ${problemIndex}`,
+        file: croppedFile,
+      });
+    }
+  }
+
+  return croppedProblems;
+};
 
 interface AssignmentDetailPageProps {
   subjectId: string;
@@ -87,6 +313,44 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
   useEffect(() => {
     void load();
   }, [load]);
+
+  const applyAutoGeneratedProblems = useCallback(async (problems: Array<{ label: string; file: File }>) => {
+    if (problems.length === 0) {
+      setStatus('No problems were detected automatically.');
+      return;
+    }
+
+    let workingAssignment = assignment;
+    while (normalizeProblemCount(workingAssignment?.problemCount || 1) < problems.length) {
+      workingAssignment = await addProblemToAssignment(assignmentId);
+    }
+    while (normalizeProblemCount(workingAssignment?.problemCount || 1) > problems.length) {
+      const result = await deleteProblemFromAssignment(
+        assignmentId,
+        normalizeProblemCount(workingAssignment.problemCount),
+      );
+      workingAssignment = result.assignment;
+    }
+
+    if (workingAssignment) {
+      setAssignment(workingAssignment);
+    }
+
+    for (const [index, problem] of problems.entries()) {
+      const problemIndex = index + 1;
+      await saveProblemImage(assignmentId, problemIndex, problem.file);
+      if (problem.label.trim()) {
+        await renameAssignmentProblem(assignmentId, problemIndex, problem.label.trim());
+      }
+    }
+
+    await loadProblemTitles();
+    const refreshedAssignment = await getAssignmentById(assignmentId).catch(() => null);
+    if (refreshedAssignment) {
+      setAssignment(refreshedAssignment);
+    }
+    setStatus(`Created ${problems.length} whiteboard${problems.length === 1 ? '' : 's'} automatically from the assignment sheet.`);
+  }, [assignment, assignmentId, loadProblemTitles]);
 
   const handleAddProblem = async () => {
     if (!assignment) return;
@@ -170,9 +434,12 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
     setLoading(true);
     try {
       await saveAssignmentPdf(assignmentId, file);
-      setStatus(`Uploaded ${file.name}.`);
+      setStatus(`Uploaded ${file.name}. Detecting questions and creating whiteboards...`);
       const nextRecord = await getAssignmentPdf(assignmentId);
       setFileRecord(nextRecord || null);
+      const worksheetPages = await renderPdfToWorksheetPages(file);
+      const problems = await buildDetectedProblemCrops(assignmentId, worksheetPages);
+      await applyAutoGeneratedProblems(problems);
     } catch (error) {
       setStatus((error as Error)?.message || 'Unable to upload PDF.');
     } finally {
@@ -207,11 +474,13 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
     setLoading(true);
     try {
       await saveAssignmentCaptureImage(assignmentId, file);
-      setStatus(`Uploaded ${file.name} to image/capture.`);
+      setStatus(`Uploaded ${file.name}. Detecting questions and creating whiteboards...`);
       const nextRecord = await getAssignmentCaptureImage(assignmentId);
       setCaptureRecord(nextRecord || null);
+      const problems = await buildDetectedProblemCrops(assignmentId, [{ file }]);
+      await applyAutoGeneratedProblems(problems);
     } catch (error) {
-      setStatus((error as Error)?.message || 'Unable to upload capture image.');
+      setStatus((error as Error)?.message || 'Unable to auto-create whiteboards from this capture.');
     } finally {
       setLoading(false);
     }

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Flame, Settings, Square } from 'lucide-react';
+import { Flame, Settings } from 'lucide-react';
 
 interface TopbarProps {
   user: any;
@@ -9,6 +9,7 @@ interface TopbarProps {
   onStopAudio: () => void;
   showAudioControl: boolean;
   isAudioPlaying: boolean;
+  audioButtonLabel?: string;
   streakCount: number;
   notificationCount: number;
 }
@@ -21,6 +22,7 @@ export function Topbar({
   onStopAudio,
   showAudioControl,
   isAudioPlaying,
+  audioButtonLabel = 'Play Audio',
   streakCount,
   notificationCount,
 }: TopbarProps) {
@@ -63,8 +65,8 @@ export function Topbar({
   return (
     <div className="app-topbar">
       <div className="topbar-left">
-        <div className="main-page-logo" aria-label="StepWise">
-          M
+        <div className="main-page-logo" aria-label="StepWise" data-no-translate="true">
+          <img src="/logo.svg" alt="StepWise logo" className="main-page-logo-image" />
         </div>
       </div>
 
@@ -74,11 +76,10 @@ export function Topbar({
             type="button"
             className={`topbar-audio-button ${isAudioPlaying ? 'is-playing' : ''}`}
             onClick={onStopAudio}
-            title="Stop audio narration"
-            aria-label="Stop audio narration"
+            title={isAudioPlaying ? "Stop audio narration" : `${audioButtonLabel.toLowerCase()} narration`}
+            aria-label={isAudioPlaying ? "Stop audio narration" : `${audioButtonLabel.toLowerCase()} narration`}
           >
-            <Square size={16} />
-            <span>Stop Audio</span>
+            <span>{isAudioPlaying ? 'Stop Audio' : audioButtonLabel}</span>
           </button>
         ) : null}
 
@@ -101,6 +102,7 @@ export function Topbar({
             className={`account-button ${avatarSrc && !avatarFailed ? 'account-button-with-photo' : ''}`}
             onClick={() => setShowAccountMenu(!showAccountMenu)}
             title={user.name}
+            data-no-translate="true"
           >
             {avatarSrc && !avatarFailed ? (
               <img
@@ -117,7 +119,10 @@ export function Topbar({
 
           {showAccountMenu && (
             <div className="account-menu">
-              <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', marginBottom: '8px' }}>
+              <div
+                style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', marginBottom: '8px' }}
+                data-no-translate="true"
+              >
                 <div style={{ fontWeight: 600, fontSize: '14px' }}>{user.name}</div>
                 <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>{user.email}</div>
               </div>

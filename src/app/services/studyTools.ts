@@ -60,7 +60,13 @@ export async function sendSocraticChat(
     tutorMode?: "saarthi" | "vaani";
     subjectId?: string;
     classLevel?: number;
-    context?: { topic?: string; concept?: string; errorType?: string; responseFormat?: "steps" | "voice" };
+    context?: {
+      topic?: string;
+      concept?: string;
+      errorType?: string;
+      responseFormat?: "steps" | "voice";
+      tutorId?: "vaani" | "saarthi";
+    };
     audioBase64?: string;
     images?: { base64: string; mimeType: string }[];
   }

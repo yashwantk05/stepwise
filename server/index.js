@@ -348,10 +348,22 @@ const getAzureConfig = () => {
   const endpoint = trimTrailingSlash(readEnv("AZURE_OPENAI_ENDPOINT"));
   const apiKey = readEnv("AZURE_OPENAI_API_KEY");
   const apiVersion = readEnv("AZURE_OPENAI_API_VERSION") || "2024-02-01";
-  const deployment =
-    readEnv("AZURE_OPENAI_MODEL") ||
-    readEnv("AZURE_OPENAI_DEPLOYMENT") ||
-    readEnv("AZURE_OPENAI_DEPLOYMENT_NAME");
+  const fallbackDeployments = readEnv("AZURE_OPENAI_FALLBACK_DEPLOYMENTS")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const deployments = Array.from(
+    new Set(
+      [
+        readEnv("AZURE_OPENAI_DEPLOYMENT"),
+        readEnv("AZURE_OPENAI_DEPLOYMENT_NAME"),
+        readEnv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
+        readEnv("AZURE_OPENAI_MODEL"),
+        ...fallbackDeployments,
+      ].filter(Boolean),
+    ),
+  );
+  const deployment = deployments[0] || "";
 
   const missing = [];
   if (!endpoint) missing.push("AZURE_OPENAI_ENDPOINT");
@@ -367,6 +379,35 @@ const getAzureConfig = () => {
     apiKey,
     apiVersion,
     deployment,
+    deployments,
+  };
+};
+
+const isMissingAzureDeploymentError = (status, detail) =>
+  Number(status) === 404 &&
+  /could not find an existing deployment|deployment/i.test(String(detail || ""));
+
+const getAzureTranslatorConfig = () => {
+  const endpoint = trimTrailingSlash(
+    readEnv("AZURE_TRANSLATOR_ENDPOINT") || "https://api.cognitive.microsofttranslator.com",
+  );
+  const documentEndpoint = trimTrailingSlash(readEnv("AZURE_DOCUMENT_TRANSLATOR_ENDPOINT"));
+  const apiKey = readEnv("AZURE_TRANSLATOR_KEY");
+  const region = readEnv("AZURE_TRANSLATOR_REGION");
+
+  const missing = [];
+  if (!apiKey) missing.push("AZURE_TRANSLATOR_KEY");
+  if (!endpoint) missing.push("AZURE_TRANSLATOR_ENDPOINT");
+
+  if (missing.length > 0) {
+    throw new Error(`Azure Translator is not configured. Missing: ${missing.join(", ")}`);
+  }
+
+  return {
+    endpoint,
+    documentEndpoint,
+    apiKey,
+    region,
   };
 };
 
@@ -593,40 +634,73 @@ const requestAzureChatCompletion = async ({
   debugTag = "general",
   debugMeta = null,
 }) => {
-  const { endpoint, apiKey, apiVersion, deployment } = getAzureConfig();
-  const response = await fetch(
-    `${endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "api-key": apiKey,
-      },
-      body: JSON.stringify({
-        temperature,
-        max_completion_tokens: maxTokens,
-        messages,
-      }),
-    },
-  );
+  const { endpoint, apiKey, apiVersion, deployments } = getAzureConfig();
+  let payload = null;
+  let deployment = deployments[0] || "";
+  let requestId = "";
+  let lastFailure = null;
 
-  const requestId = getAzureRequestIdFromHeaders(response.headers);
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    console.error("Azure OpenAI request failed", {
-      debugTag,
-      status: response.status,
-      requestId,
-      detail: String(detail || "").slice(0, 600),
-      deployment,
-      apiVersion,
-      ...summarizeMessagesForDebug(messages),
-      ...(debugMeta && typeof debugMeta === "object" ? debugMeta : {}),
-    });
-    throw new Error(`Azure OpenAI request failed (${response.status}). ${detail}`.trim());
+  for (const candidateDeployment of deployments) {
+    const response = await fetch(
+      `${endpoint}/openai/deployments/${encodeURIComponent(candidateDeployment)}/chat/completions?api-version=${encodeURIComponent(apiVersion)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": apiKey,
+        },
+        body: JSON.stringify({
+          temperature,
+          max_completion_tokens: maxTokens,
+          messages,
+        }),
+      },
+    );
+
+    requestId = getAzureRequestIdFromHeaders(response.headers);
+    deployment = candidateDeployment;
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      const failure = {
+        debugTag,
+        status: response.status,
+        requestId,
+        detail: String(detail || "").slice(0, 600),
+        deployment: candidateDeployment,
+        apiVersion,
+        ...summarizeMessagesForDebug(messages),
+        ...(debugMeta && typeof debugMeta === "object" ? debugMeta : {}),
+      };
+
+      if (
+        isMissingAzureDeploymentError(response.status, detail) &&
+        candidateDeployment !== deployments[deployments.length - 1]
+      ) {
+        console.warn("Azure deployment unavailable, trying fallback", failure);
+        lastFailure = failure;
+        continue;
+      }
+
+      console.error("Azure OpenAI request failed", failure);
+      throw new Error(`Azure OpenAI request failed (${response.status}). ${detail}`.trim());
+    }
+
+    payload = await response.json();
+    if (candidateDeployment !== deployments[0]) {
+      console.warn("Azure OpenAI fallback deployment succeeded", {
+        debugTag,
+        deployment: candidateDeployment,
+        previousFailure: lastFailure?.deployment || null,
+      });
+    }
+    break;
   }
 
-  const payload = await response.json();
+  if (!payload) {
+    throw new Error("Azure OpenAI request failed before receiving a valid response.");
+  }
+
   const choice = payload?.choices?.[0] || {};
   const rawContent = choice?.message?.content;
   const content = typeof rawContent === "string" ? rawContent.trim() : "";
@@ -692,6 +766,50 @@ Rules:
 - Be concise.
 - Do not include explanations.
 - Do not include tutoring instructions.
+            `.trim(),
+          },
+          createImageUrlPart(buffer, mimeType),
+        ],
+      },
+    ],
+  });
+
+const clampUnit = (value, fallback) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(1, numeric));
+};
+
+const detectProblemRegionsWithAzure = async (buffer, mimeType = "image/png") =>
+  requestAzureChatCompletion({
+    maxTokens: 700,
+    temperature: 0.1,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `
+You are detecting separate math questions on a worksheet image.
+
+Return JSON only in this shape:
+{
+  "problems": [
+    {
+      "label": "Problem 1",
+      "bounds": { "x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0 }
+    }
+  ]
+}
+
+Rules:
+- bounds are normalized from 0 to 1 relative to the full image.
+- Include one item per clearly separate question area.
+- Sort from top to bottom, then left to right.
+- Keep each crop tight but include the full statement needed to solve the question.
+- If the sheet appears to contain a single question, return one problem covering that question.
+- Do not include any text outside JSON.
             `.trim(),
           },
           createImageUrlPart(buffer, mimeType),
@@ -1310,6 +1428,61 @@ Rules:
         })).filter((item) => item.topic)
       : [],
     summary: String(parsed.summary || "").trim(),
+  };
+};
+
+const buildDashboardInsightsFallback = ({ studentName, notebooks }) => {
+  const safeName = String(studentName || "Student").trim() || "Student";
+  const notebookList = Array.isArray(notebooks) ? notebooks : [];
+  const topNotebooks = notebookList.slice(0, 3);
+  const focusNames = topNotebooks.map((item) => String(item?.notebook || "").trim()).filter(Boolean);
+  const recommendationSource = topNotebooks.length > 0 ? topNotebooks : notebookList;
+
+  return {
+    learningPlan: [
+      {
+        label: "Topics to revise",
+        detail: focusNames.length > 0
+          ? `Focus on ${focusNames.join(", ")} today.`
+          : `${safeName}, add notebook content to unlock topic guidance.`,
+        value: focusNames.length > 0 ? `${focusNames.length} topics` : "Set up",
+      },
+      {
+        label: "Practice problems",
+        detail: recommendationSource.length > 0
+          ? "Solve a short set from your active assignment sheets."
+          : "Upload an assignment sheet to start problem practice.",
+        value: recommendationSource.length > 0 ? `${Math.max(3, recommendationSource.length * 2)} problems` : "0 problems",
+      },
+      {
+        label: "AI revision suggested",
+        detail: recommendationSource.length > 0
+          ? "Review weak areas with Saarthi or quiz tools."
+          : "Your revision suggestions will appear after you add notes.",
+        value: recommendationSource.length > 0 ? "15 min" : "Coming soon",
+      },
+    ],
+    recommendations: (recommendationSource.length > 0
+      ? recommendationSource
+      : [{ notebook: "your notebook", progressScore: 0 }]).slice(0, 3).map((item) => {
+      const notebook = String(item?.notebook || "your notebook").trim();
+      const score = Math.max(0, Math.min(100, Number(item?.progressScore || 0)));
+      return {
+        title: `Review ${notebook}`,
+        reason: score >= 70 ? "You are progressing well. Keep the momentum going." : "This area needs a little more revision and practice.",
+        action: "Open notes",
+      };
+    }),
+    mastery: notebookList.map((item) => {
+      const score = Math.max(0, Math.min(100, Number(item?.progressScore || 0)));
+      return {
+        topic: String(item?.notebook || "Untitled notebook").trim() || "Untitled notebook",
+        score,
+        status: score >= 80 ? "strong" : score >= 50 ? "medium" : "weak",
+        focus: score >= 80 ? "Strong progress. Keep revising." : "Needs more revision and guided practice.",
+      };
+    }),
+    summary: "Fallback dashboard insights are shown while Azure AI recommendations are unavailable.",
   };
 };
 
@@ -2585,7 +2758,8 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const history = Array.isArray(request.body?.history) ? request.body.history : [];
   const subjectId = request.body?.subjectId || null;
   const context = request.body?.context || {}; // { topic, concept, errorType, responseFormat }
-  const tutorMode = String(request.body?.tutorMode || "saarthi").trim().toLowerCase() === "vaani" ? "vaani" : "saarthi";
+  const requestedTutorId = String(context?.tutorId || request.body?.tutorMode || "").trim().toLowerCase();
+  const tutorId = requestedTutorId === "vaani" ? "vaani" : "saarthi";
   const threadId = String(request.body?.threadId || "").trim();
   const audioBase64 = String(request.body?.audioBase64 || "").trim();
   const images = Array.isArray(request.body?.images) ? request.body.images : [];
@@ -2726,7 +2900,7 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
         messageChars: message.length,
         historyCount: history.length,
         classLevel,
-        tutorMode,
+        tutorId,
         searchQueryChars: searchQuery.length,
         searchEnabled: searchStrategy.enabled,
         searchReason: searchStrategy.reason,
@@ -2739,27 +2913,35 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
       });
     }
 
-    const tutorStylePrompt = tutorMode === "vaani"
-      ? `You are Vaani, a straightforward math tutor.
-Give direct, clear explanations first instead of asking leading questions.
-When the student asks for help solving a problem, provide the shortest correct path they can follow immediately.
-Keep the tone practical and concise.`
-      : `You are Saarthi, a Socratic tutor aiming to help a student learn without giving away direct answers.
-Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.`;
+    const tutorInstruction =
+      tutorId === "vaani"
+        ? `You are Vaani, a straightforward tutor.
+Start with the direct answer, then explain briefly in practical language.`
+        : `You are Saarthi, a Socratic tutor aiming to help a student learn without giving away the direct answers.
+Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
+Do not reveal the final answer unless the student explicitly asks after trying.`;
 
-    const systemPrompt = `${tutorStylePrompt}
+    const formattingInstruction =
+      tutorId === "vaani"
+        ? `Formatting rules:
+- Start with the direct answer or result.
+- Then give 2-4 short supporting steps or reasons.
+- Keep the full response compact and avoid long paragraphs.`
+        : `Formatting rules:
+- If response format is "steps": provide 3-4 numbered steps max, each concise, then 1 short check question.
+- If response format is "voice": provide at most 3 short sentences in spoken style.
+- Keep the full response compact and avoid long paragraphs.`;
+
+    const systemPrompt = `${tutorInstruction}
 Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
 If there is relevant notes context provided below, use it to provide personalized hints or references.
 If the student sends audio, transcribe their speech internally and respond to the content of what they said.
-If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and guide the student based on the visual content.
+If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and respond based on the visual content.
 If source images from the student's notebook are included in this conversation, use them to provide visual references and better explanations. Reference specific diagrams or figures when helpful.
 Current learning context: Topic: ${context.topic || "unknown"}.
+Selected tutor: ${tutorId === "vaani" ? "Vaani" : "Saarthi"}.
 Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
-Formatting rules:
-- If tutor mode is "saarthi": do not reveal full final answers unless explicitly asked; use hints and a short check question.
-- If tutor mode is "vaani": give a direct explanation in 3-5 concise bullets or short steps; include the key formula/reasoning plainly.
-- If response format is "voice": provide at most 3 short sentences in spoken style.
-- Keep the full response compact and avoid long paragraphs.
+${formattingInstruction}
 
 ${noteContext}`;
 
@@ -2827,7 +3009,7 @@ ${noteContext}`;
         userId: request.user?.id || "unknown",
         threadId: threadId || null,
         historyCount: history.length,
-        tutorMode,
+        tutorId,
         searchEnabled: searchStrategy.enabled,
         searchReason: searchStrategy.reason,
         searchResultCount: searchResults.length,
@@ -2929,6 +3111,152 @@ app.get("/api/speech/token", requireAuth, async (request, response) => {
   }
 });
 
+app.post("/api/assignments/:id/problem-detections", requireAuth, upload.single("file"), async (request, response) => {
+  const assignment = await findAssignmentById(request.user.id, request.params.id);
+  if (!assignment) {
+    response.status(404).json({ message: "Assignment not found." });
+    return;
+  }
+
+  const file = request.file;
+  if (!file) {
+    response.status(400).json({ message: "Worksheet image is required." });
+    return;
+  }
+
+  const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+  if (!allowedTypes.has(file.mimetype)) {
+    response.status(400).json({ message: "Only PNG, JPEG, and WEBP uploads are supported." });
+    return;
+  }
+
+  try {
+    const raw = await detectProblemRegionsWithAzure(file.buffer, file.mimetype || "image/png");
+    const cleaned = String(raw || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    const parsed = safeJsonParse(cleaned) || {};
+    const problems = Array.isArray(parsed?.problems) ? parsed.problems : [];
+
+    const normalizedProblems = problems
+      .map((problem, index) => {
+        const bounds = problem?.bounds || {};
+        const x = clampUnit(bounds.x, 0);
+        const y = clampUnit(bounds.y, 0);
+        const width = clampUnit(bounds.width, 1 - x);
+        const height = clampUnit(bounds.height, 1 - y);
+
+        return {
+          label: normalizeBoundedText(problem?.label || `Problem ${index + 1}`, 120) || `Problem ${index + 1}`,
+          bounds: {
+            x,
+            y,
+            width: Math.max(0.08, Math.min(1 - x, width)),
+            height: Math.max(0.08, Math.min(1 - y, height)),
+          },
+        };
+      })
+      .filter((problem) => problem.bounds.width > 0 && problem.bounds.height > 0)
+      .slice(0, MAX_PROBLEM_COUNT);
+
+    response.json({
+      assignmentId: assignment.id,
+      problems: normalizedProblems.length > 0
+        ? normalizedProblems
+        : [{ label: "Problem 1", bounds: { x: 0, y: 0, width: 1, height: 1 } }],
+    });
+  } catch (error) {
+    console.error("Problem detection failed:", error.message);
+    response.status(500).json({ message: "Unable to detect problems from this worksheet right now." });
+  }
+});
+
+app.post("/api/accessibility/translate", requireAuth, async (request, response) => {
+  const targetLanguage = String(request.body?.targetLanguage || "").trim().toLowerCase();
+  const texts = Array.isArray(request.body?.texts) ? request.body.texts : [];
+
+  if (!targetLanguage) {
+    response.status(400).json({ message: "targetLanguage is required." });
+    return;
+  }
+
+  const normalizedTexts = texts
+    .map((entry) => String(entry || ""))
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+
+  if (normalizedTexts.length === 0) {
+    response.json({ targetLanguage, translations: [] });
+    return;
+  }
+
+  try {
+    const { endpoint, documentEndpoint, apiKey, region } = getAzureTranslatorConfig();
+    const candidateEndpoints = Array.from(
+      new Set(
+        [endpoint, documentEndpoint]
+          .map((value) => trimTrailingSlash(value))
+          .filter(Boolean),
+      ),
+    );
+
+    let payload = null;
+    let lastError = null;
+
+    for (const candidateEndpoint of candidateEndpoints) {
+      const translatorUrl = new URL(`${candidateEndpoint}/translator/text/v3.0/translate`);
+      translatorUrl.searchParams.set("api-version", "3.0");
+      translatorUrl.searchParams.set("to", targetLanguage);
+
+      const headers = {
+        "Content-Type": "application/json",
+        "Ocp-Apim-Subscription-Key": apiKey,
+        "X-ClientTraceId": randomBytes(16).toString("hex"),
+      };
+
+      if (region) {
+        headers["Ocp-Apim-Subscription-Region"] = region;
+      }
+
+      const translatorResponse = await fetch(translatorUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(normalizedTexts.map((text) => ({ text }))),
+      });
+
+      if (!translatorResponse.ok) {
+        const detail = await translatorResponse.text().catch(() => "");
+        lastError = new Error(
+          `Azure Translator request failed for ${candidateEndpoint} (${translatorResponse.status}). ${String(detail).slice(0, 300)}`,
+        );
+        continue;
+      }
+
+      payload = await translatorResponse.json();
+      lastError = null;
+      break;
+    }
+
+    if (!payload) {
+      throw lastError || new Error("Azure Translator request failed.");
+    }
+
+    const translations = Array.isArray(payload)
+      ? payload.map((item, index) => {
+          const value = item?.translations?.[0]?.text;
+          return typeof value === "string" && value.trim() ? value : normalizedTexts[index];
+        })
+      : normalizedTexts;
+
+    response.json({
+      targetLanguage,
+      translations,
+    });
+  } catch (error) {
+    console.error("Accessibility translation failed:", error.message);
+    response.status(500).json({ message: "Unable to translate the app right now." });
+  }
+});
+
 app.post("/api/dashboard/insights", requireAuth, async (request, response) => {
   const studentName = String(request.body?.studentName || "").trim();
   const notebooks = Array.isArray(request.body?.notebooks) ? request.body.notebooks : [];
@@ -2946,7 +3274,7 @@ app.post("/api/dashboard/insights", requireAuth, async (request, response) => {
     response.json(insights);
   } catch (error) {
     console.error("Dashboard insight generation failed:", error.message);
-    response.status(500).json({ message: "Unable to generate dashboard insights right now." });
+    response.json(buildDashboardInsightsFallback({ studentName, notebooks }));
   }
 });
 

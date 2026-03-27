@@ -9,7 +9,7 @@ export function LoginPage() {
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <div className="logo">M</div>
+        <div className="logo" data-no-translate="true">M</div>
         <h1>Welcome to StepWise AI</h1>
         <p className="subtitle">Sign in to access your learning dashboard and AI whiteboard</p>
         

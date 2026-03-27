@@ -4092,6 +4092,35 @@ textarea {
   word-break: break-word;
 }
 
+.socratic-bubble-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.socratic-bubble-meta-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.socratic-bubble-time {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.socratic-bubble-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 18px;
+  background: linear-gradient(135deg, #f8fafc, #e2e8f0);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
 .socratic-bubble-play {
   position: absolute;
   top: 10px;
@@ -4127,6 +4156,81 @@ textarea {
 
 .socratic-page-v2 .socratic-bubble-assistant {
   padding-right: 48px;
+}
+
+.socratic-tutor-box {
+  grid-column: 1 / -1;
+}
+
+.socratic-tutor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.socratic-tutor-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.78);
+  text-align: left;
+  transition: border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.socratic-tutor-card:hover {
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--line));
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.socratic-tutor-card.active {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 14%, transparent);
+  background: color-mix(in srgb, var(--surface) 84%, #eef4ff);
+}
+
+.socratic-tutor-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+}
+
+.socratic-tutor-avatar-vaani {
+  background: linear-gradient(135deg, #fbcfe8, #ddd6fe);
+}
+
+.socratic-tutor-avatar-saarthi {
+  background: linear-gradient(135deg, #bfdbfe, #99f6e4);
+}
+
+.socratic-tutor-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.socratic-tutor-copy strong {
+  font-size: 1rem;
+}
+
+.socratic-tutor-copy span {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.socratic-tutor-copy small {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 /* Image previews in input bar */
@@ -4236,6 +4340,10 @@ textarea {
   .socratic-context-grid {
     grid-template-columns: minmax(0, 1fr);
     padding: 12px 14px;
+  }
+
+  .socratic-tutor-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .socratic-context-panel.open {

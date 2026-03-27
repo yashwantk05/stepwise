@@ -79,7 +79,9 @@ Backend:
 - `AZURE_OPENAI_API_KEY`
 - `AZURE_OPENAI_ENDPOINT`
 - `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_DEPLOYMENT` (preferred Azure deployment name)
 - `AZURE_OPENAI_MODEL`
+- `AZURE_OPENAI_FALLBACK_DEPLOYMENTS` (optional comma-separated retry list)
 - `AZURE_VISION_ENDPOINT`
 - `AZURE_VISION_KEY`
 - `STEPWISE_DEBUG_ROUTES` (set `true` to enable `/api/debug/echo-image`)

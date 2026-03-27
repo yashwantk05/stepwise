@@ -1,9 +1,21 @@
 import type { UserSettings } from "./storage";
+import {
+  registerGlobalAudioStopHandler,
+  setGlobalAudioSourceActive,
+} from "./audioControl";
+import { getSpeechLanguageCode } from "./translation";
+import { getSpeechToken } from "./studyTools";
+import * as speechSdk from "microsoft-cognitiveservices-speech-sdk";
 
 let activeUtterance: SpeechSynthesisUtterance | null = null;
 let playbackSessionId = 0;
 let isAccessibilitySpeechActive = false;
 let speechCancelSweepTimer: number | null = null;
+let activeSynthesizer: speechSdk.SpeechSynthesizer | null = null;
+let activePlayer: speechSdk.SpeakerAudioDestination | null = null;
+let currentSpeechText = "";
+let currentSpeechKey = "";
+let currentSpeechCursor = 0;
 const speechStateListeners = new Set<(active: boolean) => void>();
 
 const DEFAULT_FONT_STACK =
@@ -18,6 +30,7 @@ const mapTextZoom = (value: number) => 0.94 + (value / 100) * 0.32;
 
 const emitSpeechState = (active: boolean) => {
   isAccessibilitySpeechActive = active;
+  setGlobalAudioSourceActive("accessibility", active);
   speechStateListeners.forEach((listener) => {
     try {
       listener(active);
@@ -32,6 +45,7 @@ export const applyAccessibilitySettings = (settings: UserSettings) => {
   const body = document.body;
 
   root.dataset.colorTheme = settings.colorTheme;
+  root.lang = settings.appLanguage || "en";
   body.classList.toggle("accessibility-high-contrast", settings.highContrastMode);
   body.classList.toggle("accessibility-large-ui", settings.largeUiMode);
   body.classList.toggle("accessibility-dyslexia-font", settings.dyslexiaFriendlyFont);
@@ -91,6 +105,44 @@ export const stopAccessibilitySpeech = () => {
   playbackSessionId += 1;
   clearSpeechCancelSweep();
 
+  const synthesizer = activeSynthesizer;
+  const player = activePlayer;
+  activeSynthesizer = null;
+  activePlayer = null;
+
+  if (synthesizer) {
+    if (typeof synthesizer.stopSpeakingAsync === "function") {
+      synthesizer.stopSpeakingAsync(
+        () => {
+          synthesizer.close();
+        },
+        () => {
+          synthesizer.close();
+        },
+      );
+    } else {
+      synthesizer.close();
+    }
+  }
+
+  if (player) {
+    try {
+      player.pause();
+    } catch {}
+    try {
+      const audio = player.internalAudio;
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.srcObject = null;
+        audio.load();
+      }
+    } catch {}
+    try {
+      player.close();
+    } catch {}
+  }
+
   if (typeof window !== "undefined" && "speechSynthesis" in window) {
     window.speechSynthesis.cancel();
     scheduleSpeechCancelSweep(playbackSessionId);
@@ -100,6 +152,8 @@ export const stopAccessibilitySpeech = () => {
 
   emitSpeechState(false);
 };
+
+registerGlobalAudioStopHandler(stopAccessibilitySpeech);
 
 export const extractPageSpeechText = () => {
   const container =
@@ -115,21 +169,62 @@ export const extractPageSpeechText = () => {
   return text.slice(0, 2200);
 };
 
-export const speakWithAzure = async (text: string, settings: UserSettings) => {
+export const speakWithAzure = async (
+  text: string,
+  settings: UserSettings,
+  options: { resume?: boolean; sessionKey?: string } = {},
+) => {
   const content = text.replace(/\s+/g, " ").trim();
   if (!content) return;
 
+  const sessionKey = String(options.sessionKey || "").trim();
+  const canResume =
+    options.resume === true &&
+    sessionKey &&
+    currentSpeechKey === sessionKey &&
+    currentSpeechText === content &&
+    currentSpeechCursor > 0 &&
+    currentSpeechCursor < content.length;
+
+  if (!canResume) {
+    currentSpeechText = content;
+    currentSpeechKey = sessionKey;
+    currentSpeechCursor = 0;
+  }
+
+  const startOffset = canResume ? currentSpeechCursor : 0;
+  const remainingText = content.slice(startOffset).trimStart();
+  if (!remainingText) {
+    currentSpeechCursor = 0;
+    return;
+  }
+
   stopAccessibilitySpeech();
   const sessionId = playbackSessionId;
+  emitSpeechState(true);
+
+  try {
+    await speakWithAzureSpeech(remainingText, settings, sessionId, startOffset);
+    return;
+  } catch (error) {
+    if (sessionId !== playbackSessionId) return;
+    console.warn("Azure accessibility speech unavailable, falling back to browser speech.", error);
+  }
+
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
     emitSpeechState(false);
     return;
   }
 
-  await speakWithBrowserSpeech(content, settings, sessionId);
+  await speakWithBrowserSpeech(remainingText, settings, sessionId, startOffset);
 };
 
-async function speakWithBrowserSpeech(text: string, settings: UserSettings, sessionId: number) {
+async function speakWithBrowserSpeech(
+  text: string,
+  settings: UserSettings,
+  sessionId: number,
+  startOffset: number,
+) {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
 
   await waitForSpeechQueueToClear(sessionId);
@@ -137,14 +232,19 @@ async function speakWithBrowserSpeech(text: string, settings: UserSettings, sess
 
   const utterance = new SpeechSynthesisUtterance(text);
   activeUtterance = utterance;
-  emitSpeechState(true);
   utterance.rate = mapSpeechRate(settings.speechRate);
-  utterance.lang = "en-US";
+  utterance.lang = getSpeechLanguageCode(settings);
+  utterance.onboundary = (event) => {
+    if (sessionId !== playbackSessionId) return;
+    const nextOffset = startOffset + Number(event.charIndex || 0);
+    currentSpeechCursor = Math.max(currentSpeechCursor, Math.min(currentSpeechText.length, nextOffset));
+  };
   utterance.onend = () => {
     if (sessionId !== playbackSessionId) return;
     if (activeUtterance === utterance) {
       activeUtterance = null;
     }
+    currentSpeechCursor = 0;
     emitSpeechState(false);
   };
   utterance.onerror = () => {
@@ -155,6 +255,98 @@ async function speakWithBrowserSpeech(text: string, settings: UserSettings, sess
     emitSpeechState(false);
   };
   window.speechSynthesis.speak(utterance);
+}
+
+async function speakWithAzureSpeech(
+  text: string,
+  settings: UserSettings,
+  sessionId: number,
+  startOffset: number,
+) {
+  const { token, region } = await getSpeechToken();
+  if (sessionId !== playbackSessionId) return;
+
+  const speechConfig = speechSdk.SpeechConfig.fromAuthorizationToken(token, region);
+  speechConfig.speechSynthesisVoiceName = resolveAccessibilityVoice(settings);
+
+  const player = new speechSdk.SpeakerAudioDestination();
+  player.onAudioEnd = () => {
+    if (activePlayer === player) {
+      activePlayer = null;
+    }
+    if (sessionId === playbackSessionId) {
+      currentSpeechCursor = 0;
+      emitSpeechState(false);
+    }
+  };
+  activePlayer = player;
+
+  const audioConfig = speechSdk.AudioConfig.fromSpeakerOutput(player);
+  const synthesizer = new speechSdk.SpeechSynthesizer(speechConfig, audioConfig);
+  synthesizer.wordBoundary = (_sender, event) => {
+    if (sessionId !== playbackSessionId) return;
+    const nextOffset = startOffset + Number(event?.textOffset || 0);
+    currentSpeechCursor = Math.max(currentSpeechCursor, Math.min(currentSpeechText.length, nextOffset));
+  };
+  activeSynthesizer = synthesizer;
+
+  if (sessionId !== playbackSessionId) {
+    player.close();
+    synthesizer.close();
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    synthesizer.speakTextAsync(
+      text,
+      () => {
+        synthesizer.close();
+        if (activeSynthesizer === synthesizer) {
+          activeSynthesizer = null;
+        }
+        resolve();
+      },
+      (error) => {
+        synthesizer.close();
+        if (activeSynthesizer === synthesizer) {
+          activeSynthesizer = null;
+        }
+        if (activePlayer === player) {
+          try {
+            player.close();
+          } catch {}
+          activePlayer = null;
+        }
+        reject(error);
+      },
+    );
+  });
+}
+
+export const hasAccessibilitySpeechResume = (sessionKey: string, text: string) =>
+  String(sessionKey || "").trim() !== "" &&
+  currentSpeechKey === String(sessionKey || "").trim() &&
+  currentSpeechText === String(text || "").replace(/\s+/g, " ").trim() &&
+  currentSpeechCursor > 0 &&
+  currentSpeechCursor < currentSpeechText.length;
+
+function resolveAccessibilityVoice(settings: UserSettings) {
+  switch (getSpeechLanguageCode(settings)) {
+    case "hi-IN":
+      return "hi-IN-SwaraNeural";
+    case "te-IN":
+      return "te-IN-ShrutiNeural";
+    case "ta-IN":
+      return "ta-IN-PallaviNeural";
+    case "fr-FR":
+      return "fr-FR-DeniseNeural";
+    case "de-DE":
+      return "de-DE-KatjaNeural";
+    case "es-ES":
+      return "es-ES-ElviraNeural";
+    default:
+      return "en-US-JennyNeural";
+  }
 }
 
 function clearSpeechCancelSweep() {

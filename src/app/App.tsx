@@ -15,10 +15,12 @@ import {
 import {
   applyAccessibilitySettings,
   extractPageSpeechText,
+  hasAccessibilitySpeechResume,
   speakWithAzure,
   stopAccessibilitySpeech,
-  subscribeAccessibilitySpeechState,
 } from './services/accessibility';
+import { stopAllAudioPlayback, subscribeGlobalAudioState } from './services/audioControl';
+import { syncAppLanguage } from './services/translation';
 import { Sidebar } from './components/Sidebar';
 import { Topbar } from './components/Topbar';
 import { LoginPage } from './pages/LoginPage';
@@ -103,6 +105,9 @@ function App() {
     const nextSettings = getUserSettings(user?.id);
     setUserSettings(nextSettings);
     applyAccessibilitySettings(nextSettings);
+    void syncAppLanguage(nextSettings).catch((error) => {
+      console.error("Failed to sync app language:", error);
+    });
   }, [user?.id]);
 
   useEffect(() => {
@@ -137,7 +142,24 @@ function App() {
     applyAccessibilitySettings(userSettings);
   }, [userSettings]);
 
-  useEffect(() => subscribeAccessibilitySpeechState(setIsAccessibilityAudioPlaying), []);
+  useEffect(() => {
+    let cancelled = false;
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (cancelled) return;
+        void syncAppLanguage(userSettings).catch((error) => {
+          console.error("Failed to sync app language:", error);
+        });
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [route, userSettings]);
+
+  useEffect(() => subscribeGlobalAudioState(setIsAccessibilityAudioPlaying), []);
 
   useEffect(() => {
     narrationRequestId.current += 1;
@@ -169,7 +191,9 @@ function App() {
           const text = extractPageSpeechText();
           if (!text) return;
 
-          void speakWithAzure(text, userSettings).catch((error) => {
+          void speakWithAzure(text, userSettings, {
+            sessionKey: currentRouteNarrationKey,
+          }).catch((error) => {
             console.error("Accessibility speech playback failed:", error);
           });
         }, 250);
@@ -211,11 +235,28 @@ function App() {
     applyAccessibilitySettings(nextSettings);
   }, []);
 
-  const handleStopAccessibilityAudio = useCallback(() => {
+  const handleToggleAccessibilityAudio = useCallback(() => {
+    const routeKey = getRouteNarrationKey(route);
+
+    if (isAccessibilityAudioPlaying) {
+      narrationRequestId.current += 1;
+      setSuppressedNarrationRouteKey(routeKey);
+      stopAllAudioPlayback();
+      return;
+    }
+
+    const text = extractPageSpeechText();
+    if (!text) return;
+
     narrationRequestId.current += 1;
-    setSuppressedNarrationRouteKey(getRouteNarrationKey(route));
-    stopAccessibilitySpeech();
-  }, [getRouteNarrationKey, route]);
+    setSuppressedNarrationRouteKey(routeKey);
+    void speakWithAzure(text, userSettings, {
+      sessionKey: routeKey,
+      resume: hasAccessibilitySpeechResume(routeKey, text),
+    }).catch((error) => {
+      console.error("Accessibility speech playback failed:", error);
+    });
+  }, [getRouteNarrationKey, isAccessibilityAudioPlaying, route, userSettings]);
 
   const navigate = useCallback((page: string) => {
     if (page === 'dashboard') {
@@ -304,6 +345,11 @@ function App() {
     return 'whiteboard';
   };
 
+  const currentPageSpeechText = extractPageSpeechText();
+  const canResumeAudio =
+    !isAccessibilityAudioPlaying &&
+    hasAccessibilitySpeechResume(currentRouteNarrationKey, currentPageSpeechText);
+
   return (
     <div className={`app-layout ${isSidebarExpanded ? 'sidebar-expanded' : ''}`}>
       <Sidebar
@@ -319,9 +365,10 @@ function App() {
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
           onOpenSettings={() => setRoute({ type: 'settings' })}
-          onStopAudio={handleStopAccessibilityAudio}
-          showAudioControl={userSettings.textToSpeechEnabled}
+          onStopAudio={handleToggleAccessibilityAudio}
+          showAudioControl={userSettings.textToSpeechEnabled || route.type === 'socratic-tutor' || isAccessibilityAudioPlaying}
           isAudioPlaying={isAccessibilityAudioPlaying}
+          audioButtonLabel={canResumeAudio ? 'Resume Audio' : 'Play Audio'}
           streakCount={streakCount}
           notificationCount={notificationCount}
         />

@@ -5,6 +5,7 @@ interface MessageBubbleProps {
   id: string;
   role: 'assistant' | 'user';
   author: string;
+  avatar?: string;
   text: string;
   time: string;
   images?: { previewUrl: string }[];
@@ -12,7 +13,7 @@ interface MessageBubbleProps {
   onTogglePlay?: (messageId: string, text: string) => void;
 }
 
-export function MessageBubble({ id, role, author, text, time, images, isPlaying = false, onTogglePlay }: MessageBubbleProps) {
+export function MessageBubble({ id, role, author, avatar, text, time, images, isPlaying = false, onTogglePlay }: MessageBubbleProps) {
   return (
     <article className={`socratic-bubble socratic-bubble-${role}`}>
       {role === 'assistant' && text && onTogglePlay ? (
@@ -26,6 +27,17 @@ export function MessageBubble({ id, role, author, text, time, images, isPlaying 
           {isPlaying ? <Square size={13} /> : <Play size={14} />}
         </button>
       ) : null}
+      <div className="socratic-bubble-meta">
+        {role === 'assistant' ? (
+          <span className="socratic-bubble-avatar" aria-hidden="true">
+            {avatar || 'AI'}
+          </span>
+        ) : null}
+        <div className="socratic-bubble-meta-copy">
+          <strong className="socratic-bubble-author">{author}</strong>
+          <span className="socratic-bubble-time">{time}</span>
+        </div>
+      </div>
       {images && images.length > 0 && (
         <div className="socratic-bubble-images">
           {images.map((img, i) => (

@@ -2,8 +2,10 @@ import { SearchClient, SearchIndexClient, AzureKeyCredential } from "@azure/sear
 
 const readEnv = (name) => String(globalThis.process?.env?.[name] || "").trim();
 const trimTrailingSlash = (value) => String(value || "").replace(/\/+$/, "");
+let searchServiceDisabled = false;
 
 const getSearchConfig = () => {
+  if (searchServiceDisabled) return null;
   const endpoint = trimTrailingSlash(readEnv("AZURE_SEARCH_ENDPOINT"));
   const apiKey = readEnv("AZURE_SEARCH_API_KEY");
   const indexName = readEnv("AZURE_SEARCH_INDEX_NAME") || "stepwise-notes";
@@ -12,14 +14,28 @@ const getSearchConfig = () => {
   return { endpoint, apiKey, indexName };
 };
 
+const shouldDisableSearchForError = (error) => {
+  const code = String(error?.code || "").toUpperCase();
+  return code === "ENOTFOUND" || code === "ECONNREFUSED" || code === "EAI_AGAIN";
+};
+
+const disableSearchService = (reason, error) => {
+  if (searchServiceDisabled) return;
+  searchServiceDisabled = true;
+  console.warn(`Azure AI Search disabled: ${reason}`);
+  if (error?.message) {
+    console.warn(`Search details: ${error.message}`);
+  }
+};
+
 const getAzureConfig = () => {
   const endpoint = trimTrailingSlash(readEnv("AZURE_OPENAI_ENDPOINT"));
   const apiKey = readEnv("AZURE_OPENAI_API_KEY");
   const apiVersion = readEnv("AZURE_OPENAI_API_VERSION") || "2024-02-01";
   const deployment =
-    readEnv("AZURE_OPENAI_MODEL") ||
     readEnv("AZURE_OPENAI_DEPLOYMENT") ||
-    readEnv("AZURE_OPENAI_DEPLOYMENT_NAME");
+    readEnv("AZURE_OPENAI_DEPLOYMENT_NAME") ||
+    readEnv("AZURE_OPENAI_MODEL");
 
   if (!endpoint || !apiKey || !deployment) return null;
   return { endpoint, apiKey, apiVersion, deployment };
@@ -63,6 +79,10 @@ export const initSearchIndex = async () => {
     
     return true;
   } catch (err) {
+    if (shouldDisableSearchForError(err)) {
+      disableSearchService("search endpoint is unreachable from this environment.", err);
+      return false;
+    }
     if (err.statusCode !== 404) {
       console.error("Error accessing search index:", err);
       return false;
@@ -106,6 +126,10 @@ export const initSearchIndex = async () => {
     console.log(`Successfully created search index '${indexName}'.`);
     return true;
   } catch (err) {
+    if (shouldDisableSearchForError(err)) {
+      disableSearchService("search index creation endpoint is unreachable from this environment.", err);
+      return false;
+    }
     console.error("Failed to create search index:", err);
     return false;
   }
@@ -217,6 +241,10 @@ export const indexNoteChunks = async ({ userId, noteId, subjectId, subjectName, 
     await searchClient.uploadDocuments(batch);
     console.log(`Indexed ${batch.length} chunk(s) for note ${noteId} (blobName: ${blobName || 'none'})`);
   } catch (err) {
+    if (shouldDisableSearchForError(err)) {
+      disableSearchService("document indexing endpoint is unreachable from this environment.", err);
+      return;
+    }
     console.error(`Failed to index note chunks for ${noteId}:`, err);
   }
 };
@@ -245,6 +273,10 @@ export const deleteNoteFromIndex = async (noteId) => {
       await searchClient.deleteDocuments(docsToDelete);
     }
   } catch (err) {
+    if (shouldDisableSearchForError(err)) {
+      disableSearchService("delete note search endpoint is unreachable from this environment.", err);
+      return;
+    }
     console.error(`Failed to delete note index chunks for ${noteId}:`, err);
   }
 };
@@ -272,6 +304,10 @@ export const deleteNotebookFromIndex = async (subjectId) => {
       await searchClient.deleteDocuments(docsToDelete);
     }
   } catch (err) {
+    if (shouldDisableSearchForError(err)) {
+      disableSearchService("delete notebook search endpoint is unreachable from this environment.", err);
+      return;
+    }
     console.error(`Failed to delete subject index chunks for ${subjectId}:`, err);
   }
 };
@@ -324,6 +360,10 @@ export const searchNotes = async (userId, query, subjectId = null, topK = 5) => 
     
     return results;
   } catch (err) {
+    if (shouldDisableSearchForError(err)) {
+      disableSearchService("search query endpoint is unreachable from this environment.", err);
+      return [];
+    }
     console.error("Failed to search notes:", err);
     return [];
   }

@@ -6,8 +6,14 @@ interface ChatMessage {
   role: 'assistant' | 'user';
   text: string;
   time: string;
+  tutorId?: 'vaani' | 'saarthi';
   images?: { previewUrl: string }[];
 }
+
+const tutorMeta = {
+  vaani: { author: 'Vaani', avatar: '👩' },
+  saarthi: { author: 'Saarthi', avatar: '👨' },
+} as const;
 
 export function SocraticChat({
   messages,
@@ -25,7 +31,8 @@ export function SocraticChat({
           key={message.id}
           id={message.id}
           role={message.role}
-          author={message.role === 'assistant' ? 'Socratic Tutor' : 'You'}
+          author={message.role === 'assistant' ? tutorMeta[message.tutorId || 'saarthi'].author : 'You'}
+          avatar={message.role === 'assistant' ? tutorMeta[message.tutorId || 'saarthi'].avatar : undefined}
           text={message.text}
           time={message.time}
           images={message.images}

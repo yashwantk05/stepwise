@@ -498,6 +498,17 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     setProblemImageUrl("");
   }, []);
 
+  const replaceProblemImageUrl = useCallback((nextUrl: string, revokeOnClear = false) => {
+    if (problemImageUrlRef.current) {
+      URL.revokeObjectURL(problemImageUrlRef.current);
+      problemImageUrlRef.current = "";
+    }
+    if (revokeOnClear) {
+      problemImageUrlRef.current = nextUrl;
+    }
+    setProblemImageUrl(nextUrl);
+  }, []);
+
   const clearPageImageUrl = useCallback(() => {
     if (!pageImageUrlRef.current) return;
     URL.revokeObjectURL(pageImageUrlRef.current);
@@ -530,15 +541,17 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       return;
     }
 
+    setProblemImageMeta(metadata);
+
+    if (metadata.downloadUrl) {
+      replaceProblemImageUrl(metadata.downloadUrl);
+      return;
+    }
+
     const blob = await downloadProblemImageBlob(assignmentId, problemIndex);
     const objectUrl = URL.createObjectURL(blob);
-    if (problemImageUrlRef.current) {
-      URL.revokeObjectURL(problemImageUrlRef.current);
-    }
-    problemImageUrlRef.current = objectUrl;
-    setProblemImageMeta(metadata);
-    setProblemImageUrl(objectUrl);
-  }, [assignmentId, clearProblemImageUrl, problemIndex]);
+    replaceProblemImageUrl(objectUrl, true);
+  }, [assignmentId, clearProblemImageUrl, problemIndex, replaceProblemImageUrl]);
 
   const loadProblemContext = useCallback(async () => {
     const context = await getProblemContext(assignmentId, problemIndex);

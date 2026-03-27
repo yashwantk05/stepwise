@@ -512,6 +512,80 @@ const getAzureRequestIdFromHeaders = (headers) =>
   headers?.get("x-ms-request-id") ||
   "";
 
+const getContentSafetyConfig = () => ({
+  endpoint: trimTrailingSlash(readEnv("CONTENT_SAFETY_SERVICE_URL")),
+  failOpen: !["false", "0", "no"].includes(readEnv("CONTENT_SAFETY_FAIL_OPEN").toLowerCase()),
+});
+
+const moderateViaPythonService = async ({ path, payload, context, failOpenMessage }) => {
+  const { endpoint, failOpen } = getContentSafetyConfig();
+  if (!endpoint) {
+    return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
+  }
+
+  try {
+    const moderationResponse = await fetch(`${endpoint}${path}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!moderationResponse.ok) {
+      const detail = await moderationResponse.text().catch(() => "");
+      throw new Error(`Moderation service failed (${moderationResponse.status}). ${detail}`.trim());
+    }
+
+    const result = await moderationResponse.json();
+    return {
+      enforced: true,
+      skipped: false,
+      action: String(result?.action || "allow").trim().toLowerCase(),
+      categories: Array.isArray(result?.categories) ? result.categories : [],
+      reasonCodes: Array.isArray(result?.reasonCodes) ? result.reasonCodes : [],
+    };
+  } catch (error) {
+    console.error(failOpenMessage || "Content Safety request failed:", {
+      context,
+      message: error.message,
+      failOpen,
+    });
+    if (failOpen) {
+      return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
+    }
+    throw error;
+  }
+};
+
+const moderateTextInput = async (text, context) =>
+  moderateViaPythonService({
+    path: "/moderate/text",
+    context,
+    failOpenMessage: "Text moderation request failed",
+    payload: {
+      text: String(text || ""),
+      context,
+    },
+  });
+
+const moderateImageInput = async (buffer, mimeType, context) =>
+  moderateViaPythonService({
+    path: "/moderate/image",
+    context,
+    failOpenMessage: "Image moderation request failed",
+    payload: {
+      imageBase64: Buffer.from(buffer).toString("base64"),
+      mimeType: mimeType || "image/png",
+      context,
+    },
+  });
+
+const formatModerationMessage = (subject = "content") =>
+  `This ${subject} could not be accepted because it may violate safety policy.`;
+
+const shouldBlockModerationResult = (result) => String(result?.action || "") === "block";
+
 const requestAzureChatCompletion = async ({
   messages,
   maxTokens = 200,
@@ -2043,6 +2117,22 @@ app.post("/api/notes/extract-image-text", requireAuth, upload.single("file"), as
   }
 
   try {
+    const imageModeration = await moderateImageInput(
+      file.buffer,
+      file.mimetype || "image/png",
+      "notes_extract_image_text",
+    );
+    if (shouldBlockModerationResult(imageModeration)) {
+      response.status(400).json({
+        message: formatModerationMessage("notebook image"),
+        moderation: {
+          action: imageModeration.action,
+          reasonCodes: imageModeration.reasonCodes,
+        },
+      });
+      return;
+    }
+
     const text = await extractImageTextWithAzureOpenAI(file.buffer, file.mimetype || "image/png");
     response.json({ text });
   } catch (error) {
@@ -2213,14 +2303,6 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
   if (!file) { response.status(400).json({ message: "PDF file is required." }); return; }
   if (file.mimetype !== "application/pdf") { response.status(400).json({ message: "Only PDF files are supported." }); return; }
   try {
-    const subject = await loadNotebookSubjectOrRespond(request, response);
-    if (!subject) return;
-    const tempNoteId = `note-${Date.now()}`;
-    const blobResult = await uploadNoteFileToBlob({
-      userId: request.user.id, subjectId: request.params.subjectId,
-      noteId: tempNoteId, fileName: file.originalname || "upload.pdf",
-      contentType: "application/pdf", buffer: file.buffer,
-    });
     let extractedText = String(request.body?.extractedText || "").trim();
     if (!extractedText || extractedText === "No readable text was found in this PDF.") {
       try {
@@ -2229,6 +2311,51 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
         console.error("Fallback PDF extraction failed:", err.message);
       }
     }
+
+    if (extractedText) {
+      const textModeration = await moderateTextInput(
+        extractedText.slice(0, 12000),
+        "notes_upload_pdf_text",
+      );
+      if (shouldBlockModerationResult(textModeration)) {
+        response.status(400).json({
+          message: formatModerationMessage("PDF"),
+          moderation: {
+            action: textModeration.action,
+            reasonCodes: textModeration.reasonCodes,
+          },
+        });
+        return;
+      }
+    }
+
+    const pdfImages = await extractImagesFromPdfBuffer(file.buffer).catch(() => []);
+    for (const [index, image] of pdfImages.entries()) {
+      const imageModeration = await moderateImageInput(
+        image.buffer,
+        image.mimeType || "image/png",
+        `notes_upload_pdf_image_${index + 1}`,
+      );
+      if (shouldBlockModerationResult(imageModeration)) {
+        response.status(400).json({
+          message: formatModerationMessage("PDF"),
+          moderation: {
+            action: imageModeration.action,
+            reasonCodes: imageModeration.reasonCodes,
+          },
+        });
+        return;
+      }
+    }
+
+    const subject = await loadNotebookSubjectOrRespond(request, response);
+    if (!subject) return;
+    const tempNoteId = `note-${Date.now()}`;
+    const blobResult = await uploadNoteFileToBlob({
+      userId: request.user.id, subjectId: request.params.subjectId,
+      noteId: tempNoteId, fileName: file.originalname || "upload.pdf",
+      contentType: "application/pdf", buffer: file.buffer,
+    });
     const title = String(request.body?.title || file.originalname || "PDF Upload")
       .replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "PDF Upload";
     const note = await insertNotebookNote(request.user.id, request.params.subjectId, {
@@ -2277,6 +2404,22 @@ app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.sin
   const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
   if (!allowedTypes.has(file.mimetype)) { response.status(400).json({ message: "Only PNG, JPEG, and WEBP images are supported." }); return; }
   try {
+    const imageModeration = await moderateImageInput(
+      file.buffer,
+      file.mimetype,
+      "notes_upload_image",
+    );
+    if (shouldBlockModerationResult(imageModeration)) {
+      response.status(400).json({
+        message: formatModerationMessage("notebook image"),
+        moderation: {
+          action: imageModeration.action,
+          reasonCodes: imageModeration.reasonCodes,
+        },
+      });
+      return;
+    }
+
     const subject = await loadNotebookSubjectOrRespond(request, response);
     if (!subject) return;
     const tempNoteId = `note-${Date.now()}`;
@@ -2455,6 +2598,38 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   }
 
   try {
+    if (message) {
+      const textModeration = await moderateTextInput(message, "socratic_chat_message");
+      if (shouldBlockModerationResult(textModeration)) {
+        return response.status(400).json({
+          message: formatModerationMessage("message"),
+          moderation: {
+            action: textModeration.action,
+            reasonCodes: textModeration.reasonCodes,
+          },
+        });
+      }
+    }
+
+    for (const [index, img] of images.entries()) {
+      const imageBuffer = Buffer.from(String(img?.base64 || ""), "base64");
+      if (!imageBuffer.length) continue;
+      const imageModeration = await moderateImageInput(
+        imageBuffer,
+        img?.mimeType || "image/png",
+        `socratic_chat_image_${index + 1}`,
+      );
+      if (shouldBlockModerationResult(imageModeration)) {
+        return response.status(400).json({
+          message: formatModerationMessage("image"),
+          moderation: {
+            action: imageModeration.action,
+            reasonCodes: imageModeration.reasonCodes,
+          },
+        });
+      }
+    }
+
     const searchQuery = message || "student question";
     const searchStrategy = shouldUseNotesSearchForQuery({
       query: searchQuery,
@@ -2663,6 +2838,11 @@ ${noteContext}`;
       },
     });
 
+    const replyModeration = await moderateTextInput(replyText, "socratic_chat_reply");
+    const safeReplyText = shouldBlockModerationResult(replyModeration)
+      ? "I can help with the academic part of this, but I can't continue with that request."
+      : replyText;
+
     if (dbReady && threadId) {
       const userMessageForHistory = message || (audioBase64 ? "(Voice input)" : images.length > 0 ? "(Image input)" : "");
       const now = Date.now();
@@ -2677,7 +2857,7 @@ ${noteContext}`;
       await insertSocraticChatMessage(request.user.id, {
         threadId,
         role: "assistant",
-        text: replyText,
+        text: safeReplyText,
         createdAt: now + 1,
       }).catch((persistError) => {
         console.warn("Failed to persist Socratic assistant message:", persistError.message);
@@ -2685,7 +2865,7 @@ ${noteContext}`;
     }
 
     response.json({ 
-      reply: replyText, 
+      reply: safeReplyText, 
       usedNotes: searchResults.length > 0,
       usedNoteImages: retrievedImages.length > 0,
     });
@@ -3371,6 +3551,40 @@ app.post(
       return;
     }
 
+    const extractedText = await extractTextFromPdfBuffer(file.buffer).catch(() => "");
+    if (extractedText) {
+      const textModeration = await moderateTextInput(extractedText.slice(0, 12000), "assignment_pdf_text");
+      if (shouldBlockModerationResult(textModeration)) {
+        response.status(400).json({
+          message: formatModerationMessage("PDF"),
+          moderation: {
+            action: textModeration.action,
+            reasonCodes: textModeration.reasonCodes,
+          },
+        });
+        return;
+      }
+    }
+
+    const pdfImages = await extractImagesFromPdfBuffer(file.buffer).catch(() => []);
+    for (const [index, image] of pdfImages.entries()) {
+      const imageModeration = await moderateImageInput(
+        image.buffer,
+        image.mimeType || "image/png",
+        `assignment_pdf_image_${index + 1}`,
+      );
+      if (shouldBlockModerationResult(imageModeration)) {
+        response.status(400).json({
+          message: formatModerationMessage("PDF"),
+          moderation: {
+            action: imageModeration.action,
+            reasonCodes: imageModeration.reasonCodes,
+          },
+        });
+        return;
+      }
+    }
+
     const existingRecord = await getAssignmentPdfByAssignmentId(request.user.id, request.params.id);
     const blobName = await uploadAssignmentPdfToBlob({
       userId: request.user.id,
@@ -3515,6 +3729,22 @@ app.post(
     const allowedTypes = new Set(["image/png", "image/jpeg"]);
     if (!allowedTypes.has(file.mimetype)) {
       response.status(400).json({ message: "Only PNG and JPEG uploads are supported." });
+      return;
+    }
+
+    const imageModeration = await moderateImageInput(
+      file.buffer,
+      file.mimetype,
+      "assignment_capture_upload",
+    );
+    if (shouldBlockModerationResult(imageModeration)) {
+      response.status(400).json({
+        message: formatModerationMessage("assignment image"),
+        moderation: {
+          action: imageModeration.action,
+          reasonCodes: imageModeration.reasonCodes,
+        },
+      });
       return;
     }
 
@@ -3800,6 +4030,22 @@ app.put(
     const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
     if (!allowedTypes.has(file.mimetype)) {
       response.status(400).json({ message: "Only PNG, JPEG, and WEBP uploads are supported." });
+      return;
+    }
+
+    const imageModeration = await moderateImageInput(
+      file.buffer,
+      file.mimetype,
+      "assignment_problem_image_upload",
+    );
+    if (shouldBlockModerationResult(imageModeration)) {
+      response.status(400).json({
+        message: formatModerationMessage("problem image"),
+        moderation: {
+          action: imageModeration.action,
+          reasonCodes: imageModeration.reasonCodes,
+        },
+      });
       return;
     }
 

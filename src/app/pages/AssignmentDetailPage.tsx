@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getAssignmentById,
   getSubjectById,
@@ -20,7 +20,7 @@ const MIN_PROBLEM_COUNT = 1;
 const MAX_PROBLEM_COUNT = 60;
 const MAX_PDF_BYTES = 20 * 1024 * 1024;
 const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
-const CAPTURE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
+const CAPTURE_TYPES = ['image/png', 'image/jpeg'];
 
 const normalizeProblemCount = (value: number) => {
   const parsed = Number(value);
@@ -46,6 +46,8 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
   const [problemTitles, setProblemTitles] = useState<Record<number, string>>({});
   const [status, setStatus] = useState('Loading assignment...');
   const [loading, setLoading] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   const loadProblemTitles = useCallback(async () => {
     const problems = await listAssignmentProblems(assignmentId);
@@ -193,7 +195,7 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
     if (!file) return;
 
     if (!CAPTURE_TYPES.includes(file.type)) {
-      setStatus('Please upload PNG, JPEG, or WEBP image.');
+      setStatus('Please upload JPG or PNG image.');
       return;
     }
 
@@ -308,12 +310,38 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
         <hr style={{ margin: '12px 0 10px' }} />
         <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>Image/Capture Channel</h3>
         <div className="form-row">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => cameraInputRef.current?.click()}
+            disabled={loading}
+          >
+            Open Camera
+          </button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => galleryInputRef.current?.click()}
+            disabled={loading}
+          >
+            Upload JPG/PNG
+          </button>
           <input
+            ref={cameraInputRef}
             type="file"
-            accept="image/png,image/jpeg,image/webp"
+            accept="image/png,image/jpeg"
             capture="environment"
             onChange={handleCaptureUpload}
             disabled={loading}
+            style={{ display: 'none' }}
+          />
+          <input
+            ref={galleryInputRef}
+            type="file"
+            accept="image/png,image/jpeg"
+            onChange={handleCaptureUpload}
+            disabled={loading}
+            style={{ display: 'none' }}
           />
           {captureRecord && (
             <>

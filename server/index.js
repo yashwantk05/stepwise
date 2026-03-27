@@ -3512,9 +3512,9 @@ app.post(
       return;
     }
 
-    const allowedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+    const allowedTypes = new Set(["image/png", "image/jpeg"]);
     if (!allowedTypes.has(file.mimetype)) {
-      response.status(400).json({ message: "Only PNG, JPEG, and WEBP uploads are supported." });
+      response.status(400).json({ message: "Only PNG and JPEG uploads are supported." });
       return;
     }
 

@@ -29,6 +29,7 @@ import { WeakAreasPage } from './pages/WeakAreasPage';
 import { ProgressAnalyticsPage } from './pages/ProgressAnalyticsPage';
 import { SocraticTutorPage } from './pages/SocraticTutorPage';
 import { StudyToolPage } from './pages/StudyToolPage';
+import { StudyToolsHubPage } from './pages/StudyToolsHubPage';
 import { SubjectDetailPage } from './pages/SubjectDetailPage';
 import { AssignmentDetailPage } from './pages/AssignmentDetailPage';
 import { ProblemBoardPage } from './pages/ProblemBoardPage';
@@ -41,9 +42,10 @@ type Route =
   | { type: 'notes' }
   | { type: 'weak-areas' }
   | { type: 'progress-analytics' }
+  | { type: 'study-tools' }
   | { type: 'settings' }
   | { type: 'socratic-tutor'; context?: Record<string, unknown> }
-  | { type: 'study-tool'; tool: StudyToolType; subjectId?: string }
+  | { type: 'study-tool'; tool: StudyToolType; subjectId?: string; backTo?: 'notes' | 'study-tools' }
   | { type: 'subject'; subjectId: string }
   | { type: 'assignment'; subjectId: string; assignmentId: string }
   | { type: 'problem'; subjectId: string; assignmentId: string; problemIndex: number };
@@ -67,6 +69,7 @@ function App() {
       case 'notes':
       case 'weak-areas':
       case 'progress-analytics':
+      case 'study-tools':
       case 'settings':
         return currentRoute.type;
       case 'socratic-tutor':
@@ -228,18 +231,20 @@ function App() {
       setRoute({ type: 'weak-areas' });
     } else if (page === 'progress-analytics') {
       setRoute({ type: 'progress-analytics' });
+    } else if (page === 'study-tools') {
+      setRoute({ type: 'study-tools' });
     } else if (page === 'settings') {
       setRoute({ type: 'settings' });
     } else if (page === 'socratic-tutor') {
       setRoute({ type: 'socratic-tutor' });
     } else if (page === 'flashcards') {
-      setRoute({ type: 'study-tool', tool: 'flashcards' });
+      setRoute({ type: 'study-tool', tool: 'flashcards', backTo: 'study-tools' });
     } else if (page === 'quiz') {
-      setRoute({ type: 'study-tool', tool: 'quiz' });
+      setRoute({ type: 'study-tool', tool: 'quiz', backTo: 'study-tools' });
     } else if (page === 'mind-map') {
-      setRoute({ type: 'study-tool', tool: 'mind-map' });
+      setRoute({ type: 'study-tool', tool: 'mind-map', backTo: 'study-tools' });
     } else if (page === 'revision-sheet') {
-      setRoute({ type: 'study-tool', tool: 'revision-sheet' });
+      setRoute({ type: 'study-tool', tool: 'revision-sheet', backTo: 'study-tools' });
     }
   }, []);
 
@@ -264,7 +269,11 @@ function App() {
   }, []);
 
   const openStudyTool = useCallback((tool: StudyToolType, subjectId?: string) => {
-    setRoute({ type: 'study-tool', tool, subjectId });
+    setRoute({ type: 'study-tool', tool, subjectId, backTo: 'notes' });
+  }, []);
+
+  const openStudyToolFromHub = useCallback((tool: StudyToolType) => {
+    setRoute({ type: 'study-tool', tool, backTo: 'study-tools' });
   }, []);
 
   const handleDashboardMetaChange = useCallback(
@@ -298,9 +307,10 @@ function App() {
     if (route.type === 'notes') return 'notes';
     if (route.type === 'weak-areas') return 'weak-areas';
     if (route.type === 'progress-analytics') return 'progress-analytics';
+    if (route.type === 'study-tools') return 'study-tools';
     if (route.type === 'settings') return 'settings';
     if (route.type === 'socratic-tutor') return 'socratic-tutor';
-    if (route.type === 'study-tool') return route.tool;
+    if (route.type === 'study-tool') return 'study-tools';
     return 'whiteboard';
   };
 
@@ -346,6 +356,10 @@ function App() {
 
         {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
 
+        {route.type === 'study-tools' && (
+          <StudyToolsHubPage onOpenStudyTool={openStudyToolFromHub} />
+        )}
+
         {route.type === 'settings' && (
           <SettingsPage
             user={user}
@@ -364,7 +378,7 @@ function App() {
           <StudyToolPage
             tool={route.tool}
             initialSubjectId={route.subjectId}
-            onBack={() => setRoute({ type: 'notes' })}
+            onBack={() => setRoute({ type: route.backTo === 'study-tools' ? 'study-tools' : 'notes' })}
           />
         )}
 

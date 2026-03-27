@@ -9,15 +9,21 @@ interface ChatMessage {
   images?: { previewUrl: string }[];
 }
 
+type TutorMode = 'saarthi' | 'vaani';
+
 export function SocraticChat({
   messages,
+  tutorMode,
   playingAssistantMessageId,
   onToggleAssistantMessageAudio,
 }: {
   messages: ChatMessage[];
+  tutorMode: TutorMode;
   playingAssistantMessageId?: string | null;
   onToggleAssistantMessageAudio?: (messageId: string, text: string) => void;
 }) {
+  const assistantName = tutorMode === 'vaani' ? 'Vaani' : 'Saarthi';
+
   return (
     <section className="socratic-chat-shell">
       {messages.map((message) => (
@@ -25,7 +31,7 @@ export function SocraticChat({
           key={message.id}
           id={message.id}
           role={message.role}
-          author={message.role === 'assistant' ? 'Socratic Tutor' : 'You'}
+          author={message.role === 'assistant' ? assistantName : 'You'}
           text={message.text}
           time={message.time}
           images={message.images}

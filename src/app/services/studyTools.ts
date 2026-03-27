@@ -57,6 +57,7 @@ export async function sendSocraticChat(
   history: { role: string; text: string }[],
   options?: {
     threadId?: string;
+    tutorMode?: "saarthi" | "vaani";
     subjectId?: string;
     classLevel?: number;
     context?: { topic?: string; concept?: string; errorType?: string; responseFormat?: "steps" | "voice" };

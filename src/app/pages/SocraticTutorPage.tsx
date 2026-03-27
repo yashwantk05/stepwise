@@ -107,6 +107,30 @@ interface ChatThread {
   updatedAt: number;
 }
 
+type TutorMode = 'saarthi' | 'vaani';
+
+const TUTOR_MODE_STORAGE_KEY = 'stepwise.tutorMode';
+const DEFAULT_TUTOR_MODE: TutorMode = 'saarthi';
+
+const getStoredTutorMode = (): TutorMode => {
+  if (typeof window === 'undefined') return DEFAULT_TUTOR_MODE;
+  const value = window.localStorage.getItem(TUTOR_MODE_STORAGE_KEY);
+  return value === 'vaani' ? 'vaani' : DEFAULT_TUTOR_MODE;
+};
+
+const getTutorProfile = (mode: TutorMode) =>
+  mode === 'vaani'
+    ? {
+      title: 'Vaani Tutor',
+      subtitle: 'Direct tutor',
+      introMessage: 'Tell me what you need. I’ll explain it directly and clearly.',
+    }
+    : {
+      title: 'Saarthi Tutor',
+      subtitle: 'Socratic tutor',
+      introMessage: 'Want to understand this better? Let’s work through it step by step.',
+    };
+
 const extractTopicFromText = (text: string, notebookOptions: string[]) => {
   const lowered = text.toLowerCase();
   const notebookMatch = notebookOptions.find((entry) => lowered.includes(entry.toLowerCase()));
@@ -141,12 +165,12 @@ const formatChatTime = (createdAt?: number) => {
   return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
-const INITIAL_ASSISTANT_MESSAGE: ChatMessage = {
+const buildInitialAssistantMessage = (mode: TutorMode): ChatMessage => ({
   id: 'assistant-initial',
   role: 'assistant',
-  text: "Want to understand this better? Let’s work through it step by step.",
+  text: getTutorProfile(mode).introMessage,
   time: formatChatTime(Date.now()),
-};
+});
 
 
 export function SocraticTutorPage({
@@ -154,6 +178,7 @@ export function SocraticTutorPage({
 }: {
   initialContext?: Partial<TutorContextState>;
 }) {
+  const [tutorMode, setTutorMode] = useState<TutorMode>(() => getStoredTutorMode());
   const [subjects, setSubjects] = useState<SubjectRecord[]>([]);
   const [context, setContext] = useState<TutorContextState>({
     topic: initialContext?.topic || '',
@@ -184,6 +209,13 @@ export function SocraticTutorPage({
   const speechSessionRef = useRef(0);
   const audioChunksRef = useRef<Blob[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const initialTutorModeRef = useRef<TutorMode>(tutorMode);
+  const tutorProfile = useMemo(() => getTutorProfile(tutorMode), [tutorMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(TUTOR_MODE_STORAGE_KEY, tutorMode);
+  }, [tutorMode]);
 
   useEffect(() => {
     listSubjects().then((rows) => setSubjects(rows as SubjectRecord[])).catch(() => {});
@@ -208,11 +240,11 @@ export function SocraticTutorPage({
           setActiveThreadId((current) => current || loaded[0].id);
           return;
         }
-        setMessages((current) => (current.length > 0 ? current : [INITIAL_ASSISTANT_MESSAGE]));
+        setMessages((current) => (current.length > 0 ? current : [buildInitialAssistantMessage(initialTutorModeRef.current)]));
       })
       .catch(() => {
         if (!mounted) return;
-        setMessages((current) => (current.length > 0 ? current : [INITIAL_ASSISTANT_MESSAGE]));
+        setMessages((current) => (current.length > 0 ? current : [buildInitialAssistantMessage(initialTutorModeRef.current)]));
       });
 
     return () => {
@@ -234,11 +266,11 @@ export function SocraticTutorPage({
             time: formatChatTime(msg.createdAt),
           }))
           : [];
-        setMessages(loaded.length > 0 ? loaded : [INITIAL_ASSISTANT_MESSAGE]);
+        setMessages(loaded.length > 0 ? loaded : [buildInitialAssistantMessage(initialTutorModeRef.current)]);
       })
       .catch(() => {
         if (!mounted) return;
-        setMessages([INITIAL_ASSISTANT_MESSAGE]);
+        setMessages([buildInitialAssistantMessage(initialTutorModeRef.current)]);
       });
 
     return () => {
@@ -505,6 +537,7 @@ export function SocraticTutorPage({
       const response = await sendSocraticChat(trimmed, history, {
         threadId,
         classLevel: selectedClassLevel || undefined,
+        tutorMode,
         audioBase64,
         images: imagePayloads.length > 0 ? imagePayloads : undefined,
         context: {
@@ -549,7 +582,7 @@ export function SocraticTutorPage({
     } finally {
       setIsLoading(false);
     }
-  }, [context, draft, attachedImages, notebookOptions, isLoading, messages]);
+  }, [context, draft, attachedImages, notebookOptions, isLoading, messages, tutorMode]);
 
   const handleNewChat = useCallback(async () => {
     setDraft('');
@@ -558,8 +591,8 @@ export function SocraticTutorPage({
     const thread = await createSocraticThread('New chat');
     setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)]);
     setActiveThreadId(thread.id);
-    setMessages([INITIAL_ASSISTANT_MESSAGE]);
-  }, [stopAssistantSpeech]);
+    setMessages([buildInitialAssistantMessage(tutorMode)]);
+  }, [stopAssistantSpeech, tutorMode]);
 
   const handleToggleAssistantMessageAudio = useCallback((messageId: string, text: string) => {
     if (playingAssistantMessageIdRef.current === messageId) {
@@ -579,13 +612,13 @@ export function SocraticTutorPage({
       if (activeThreadId === threadId) {
         setActiveThreadId(fallbackThreadId);
         if (!fallbackThreadId) {
-          setMessages([INITIAL_ASSISTANT_MESSAGE]);
+          setMessages([buildInitialAssistantMessage(tutorMode)]);
         }
       }
     } catch {
       // Keep UI unchanged when delete fails.
     }
-  }, [activeThreadId, threads]);
+  }, [activeThreadId, threads, tutorMode]);
 
   const stopRecording = useCallback(() => {
     setIsRecording(false);
@@ -683,19 +716,39 @@ export function SocraticTutorPage({
               <PanelLeft size={16} />
             </button>
             <div>
-              <h1>Socratic Tutor</h1>
-              <p>Learn by thinking, guided step by step</p>
+              <h1>{tutorProfile.title}</h1>
+              <p>{tutorProfile.subtitle}</p>
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          className={`socratic-panel-toggle ${panelOpen ? 'open' : ''}`}
-          onClick={() => setPanelOpen((v) => !v)}
-        >
-          <span>Topic</span>
-          <ChevronUp size={13} className="socratic-chevron" />
-        </button>
+        <div className="socratic-topbar-controls">
+          <div className="socratic-tutor-toggle" role="group" aria-label="Tutor mode">
+            <button
+              type="button"
+              className={`socratic-tutor-toggle-btn ${tutorMode === 'saarthi' ? 'active' : ''}`}
+              onClick={() => setTutorMode('saarthi')}
+              aria-pressed={tutorMode === 'saarthi'}
+            >
+              Saarthi
+            </button>
+            <button
+              type="button"
+              className={`socratic-tutor-toggle-btn ${tutorMode === 'vaani' ? 'active' : ''}`}
+              onClick={() => setTutorMode('vaani')}
+              aria-pressed={tutorMode === 'vaani'}
+            >
+              Vaani
+            </button>
+          </div>
+          <button
+            type="button"
+            className={`socratic-panel-toggle ${panelOpen ? 'open' : ''}`}
+            onClick={() => setPanelOpen((v) => !v)}
+          >
+            <span>Topic</span>
+            <ChevronUp size={13} className="socratic-chevron" />
+          </button>
+        </div>
       </header>
 
       {/* Collapsible context + options panel */}
@@ -771,6 +824,7 @@ export function SocraticTutorPage({
           <div className="socratic-chat-scroll">
             <SocraticChat
               messages={messages}
+              tutorMode={tutorMode}
               playingAssistantMessageId={playingAssistantMessageId}
               onToggleAssistantMessageAudio={handleToggleAssistantMessageAudio}
             />

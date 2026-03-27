@@ -2442,6 +2442,7 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const history = Array.isArray(request.body?.history) ? request.body.history : [];
   const subjectId = request.body?.subjectId || null;
   const context = request.body?.context || {}; // { topic, concept, errorType, responseFormat }
+  const tutorMode = String(request.body?.tutorMode || "saarthi").trim().toLowerCase() === "vaani" ? "vaani" : "saarthi";
   const threadId = String(request.body?.threadId || "").trim();
   const audioBase64 = String(request.body?.audioBase64 || "").trim();
   const images = Array.isArray(request.body?.images) ? request.body.images : [];
@@ -2550,6 +2551,7 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
         messageChars: message.length,
         historyCount: history.length,
         classLevel,
+        tutorMode,
         searchQueryChars: searchQuery.length,
         searchEnabled: searchStrategy.enabled,
         searchReason: searchStrategy.reason,
@@ -2562,17 +2564,25 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
       });
     }
 
-    const systemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.
-Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
+    const tutorStylePrompt = tutorMode === "vaani"
+      ? `You are Vaani, a straightforward math tutor.
+Give direct, clear explanations first instead of asking leading questions.
+When the student asks for help solving a problem, provide the shortest correct path they can follow immediately.
+Keep the tone practical and concise.`
+      : `You are Saarthi, a Socratic tutor aiming to help a student learn without giving away direct answers.
+Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.`;
+
+    const systemPrompt = `${tutorStylePrompt}
 Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
-If there is relevant notes context provided below, use it to provide personalized hints or references, but still don't give away the direct answer.
+If there is relevant notes context provided below, use it to provide personalized hints or references.
 If the student sends audio, transcribe their speech internally and respond to the content of what they said.
 If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and guide the student based on the visual content.
 If source images from the student's notebook are included in this conversation, use them to provide visual references and better explanations. Reference specific diagrams or figures when helpful.
 Current learning context: Topic: ${context.topic || "unknown"}.
 Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
 Formatting rules:
-- If response format is "steps": provide 3-4 numbered steps max, each concise, then 1 short check question.
+- If tutor mode is "saarthi": do not reveal full final answers unless explicitly asked; use hints and a short check question.
+- If tutor mode is "vaani": give a direct explanation in 3-5 concise bullets or short steps; include the key formula/reasoning plainly.
 - If response format is "voice": provide at most 3 short sentences in spoken style.
 - Keep the full response compact and avoid long paragraphs.
 
@@ -2642,6 +2652,7 @@ ${noteContext}`;
         userId: request.user?.id || "unknown",
         threadId: threadId || null,
         historyCount: history.length,
+        tutorMode,
         searchEnabled: searchStrategy.enabled,
         searchReason: searchStrategy.reason,
         searchResultCount: searchResults.length,

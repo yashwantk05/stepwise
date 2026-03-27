@@ -3128,6 +3128,69 @@ textarea {
   margin: 0 auto;
 }
 
+.study-tools-hub-shell {
+  display: grid;
+  gap: 18px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.study-tools-hub-header h1 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 2.8rem);
+}
+
+.study-tools-hub-header p {
+  margin: 8px 0 0;
+  color: #475569;
+}
+
+.study-tools-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.study-tools-hub-button {
+  min-height: 150px;
+  border: 1px solid rgba(196, 181, 253, 0.42);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.05);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+
+.study-tools-hub-button:hover {
+  box-shadow: 0 20px 38px rgba(15, 23, 42, 0.11);
+  transform: translateY(-2px);
+}
+
+.study-tools-hub-button:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.study-tools-hub-button-icon {
+  color: #7c3aed;
+  display: inline-flex;
+}
+
+.study-tools-hub-button-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.study-tools-hub-button-description {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .study-tool-header-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
@@ -3563,7 +3626,8 @@ textarea {
   .study-score-grid,
   .study-metric-grid,
   .study-sheet-grid,
-  .mind-map-grid {
+  .mind-map-grid,
+  .study-tools-hub-grid {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
@@ -3621,6 +3685,49 @@ textarea {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.socratic-topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.socratic-tutor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  background: var(--surface-light);
+}
+
+.socratic-tutor-toggle-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 10px;
+  min-width: 74px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.socratic-tutor-toggle-btn:hover {
+  color: var(--ink);
+}
+
+.socratic-tutor-toggle-btn.active {
+  background: #ede9fe;
+  color: var(--brand-dark);
+}
+
+.socratic-tutor-toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgb(139 92 246 / 0.2);
 }
 
 .socratic-history-toggle {
@@ -4248,6 +4355,15 @@ textarea {
 
   .socratic-topbar-title p {
     display: none;
+  }
+
+  .socratic-topbar-controls {
+    gap: 8px;
+  }
+
+  .socratic-tutor-toggle-btn {
+    min-width: 64px;
+    padding: 5px 8px;
   }
 
   .socratic-chat-col {
@@ -4899,6 +5015,7 @@ html[data-color-theme="dark"] .mind-map-center,
 html[data-color-theme="dark"] .study-tool-subject-picker,
 html[data-color-theme="dark"] .flashcard-stage,
 html[data-color-theme="dark"] .quiz-stage,
+html[data-color-theme="dark"] .study-tools-hub-button,
 html[data-color-theme="dark"] .study-inline-panel,
 html[data-color-theme="dark"] .mind-map-branch,
 html[data-color-theme="dark"] .insight-item,

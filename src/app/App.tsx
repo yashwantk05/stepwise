@@ -29,6 +29,7 @@ import { WhiteboardPage } from './pages/WhiteboardPage';
 import { MyNotesPage } from './pages/MyNotesPage';
 import { WeakAreasPage } from './pages/WeakAreasPage';
 import { ProgressAnalyticsPage } from './pages/ProgressAnalyticsPage';
+import { RefreshZonePage } from './pages/RefreshZonePage';
 import { SocraticTutorPage } from './pages/SocraticTutorPage';
 import { StudyToolPage } from './pages/StudyToolPage';
 import { StudyToolsHubPage } from './pages/StudyToolsHubPage';
@@ -46,6 +47,7 @@ type Route =
   | { type: 'progress-analytics' }
   | { type: 'study-tools' }
   | { type: 'settings' }
+  | { type: 'refresh-zone' }
   | { type: 'socratic-tutor'; context?: Record<string, unknown> }
   | { type: 'study-tool'; tool: StudyToolType; subjectId?: string; backTo?: 'notes' | 'study-tools' }
   | { type: 'subject'; subjectId: string }
@@ -316,6 +318,8 @@ function App() {
       setRoute({ type: 'study-tools' });
     } else if (page === 'settings') {
       setRoute({ type: 'settings' });
+    } else if (page === 'refresh-zone') {
+      setRoute({ type: 'refresh-zone' });
     } else if (page === 'socratic-tutor') {
       setRoute({ type: 'socratic-tutor' });
     } else if (page === 'flashcards') {
@@ -402,6 +406,7 @@ function App() {
     if (route.type === 'progress-analytics') return 'progress-analytics';
     if (route.type === 'study-tools') return 'study-tools';
     if (route.type === 'settings') return 'settings';
+    if (route.type === 'refresh-zone') return 'refresh-zone';
     if (route.type === 'socratic-tutor') return 'socratic-tutor';
     if (route.type === 'study-tool') return 'study-tools';
     return 'whiteboard';
@@ -462,6 +467,8 @@ function App() {
             pageContent = <WeakAreasPage />;
           } else if (cachedRoute.type === 'progress-analytics') {
             pageContent = <ProgressAnalyticsPage />;
+          } else if (cachedRoute.type === 'refresh-zone') {
+            pageContent = <RefreshZonePage />;
           } else if (cachedRoute.type === 'study-tools') {
             pageContent = <StudyToolsHubPage onOpenStudyTool={openStudyToolFromHub} />;
           } else if (cachedRoute.type === 'settings') {

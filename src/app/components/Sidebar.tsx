@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, BarChart3, BrainCircuit, LayoutDashboard, NotebookPen, PanelTopOpen, Settings, Shapes } from 'lucide-react';
+import { AlertTriangle, BarChart3, BrainCircuit, Gamepad2, LayoutDashboard, NotebookPen, PanelTopOpen, Settings, Shapes } from 'lucide-react';
 
 interface SidebarProps {
   currentPage: string;
@@ -73,6 +73,14 @@ export function Sidebar({
         >
           <span className="nav-icon"><BrainCircuit size={20} /></span>
           <span className="nav-label">Socratic Tutor</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'refresh-zone' ? 'active' : ''}`}
+          onClick={() => handleNavigate('refresh-zone')}
+        >
+          <span className="nav-icon"><Gamepad2 size={20} /></span>
+          <span className="nav-label">Refresh Zone</span>
         </button>
 
         <button

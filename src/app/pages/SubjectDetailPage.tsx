@@ -132,7 +132,7 @@ export function SubjectDetailPage({ subjectId, onBack, onOpenAssignment }: Subje
       </div>
 
       <div>
-        <h2 className="mb-2" style={{ fontSize: '20px', fontWeight: 600 }}>
+        <h2 className="page-section-title mb-2">
           📝 Assignments
         </h2>
         {assignments.length === 0 ? (
@@ -141,7 +141,7 @@ export function SubjectDetailPage({ subjectId, onBack, onOpenAssignment }: Subje
           <div className="cards-grid">
             {assignments.map((assignment) => (
               <div key={assignment.id} className="card" style={{ cursor: 'default' }}>
-                <h2 style={{ fontSize: '18px' }}>{assignment.title}</h2>
+                <h2>{assignment.title}</h2>
                 <p className="text-sm text-muted mb-1">
                   Problems: {normalizeProblemCount(assignment.problemCount)}
                 </p>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import "../styles/index.css";
 import "../styles/fonts.css";
 import "../styles/app.css";
@@ -52,10 +52,70 @@ type Route =
   | { type: 'assignment'; subjectId: string; assignmentId: string }
   | { type: 'problem'; subjectId: string; assignmentId: string; problemIndex: number };
 
+function getRouteKey(routeToKey: Route) {
+  switch (routeToKey.type) {
+    case 'dashboard':
+    case 'whiteboard':
+    case 'notes':
+    case 'weak-areas':
+    case 'progress-analytics':
+    case 'study-tools':
+    case 'settings':
+      return routeToKey.type;
+    case 'socratic-tutor':
+      return `socratic-tutor:${JSON.stringify(routeToKey.context || {})}`;
+    case 'study-tool':
+      return `study-tool:${routeToKey.tool}:${routeToKey.subjectId || ''}:${routeToKey.backTo || ''}`;
+    case 'subject':
+      return `subject:${routeToKey.subjectId}`;
+    case 'assignment':
+      return `assignment:${routeToKey.subjectId}:${routeToKey.assignmentId}`;
+    case 'problem':
+      return `problem:${routeToKey.subjectId}:${routeToKey.assignmentId}:${routeToKey.problemIndex}`;
+    default:
+      return 'unknown';
+  }
+}
+
+function useStableRouteState(initialRoute: Route) {
+  const [route, setRouteState] = useState<Route>(initialRoute);
+  const activeRouteKey = useMemo(() => getRouteKey(route), [route]);
+
+  const setRoute = useCallback((nextRoute: Route) => {
+    setRouteState((currentRoute) => {
+      if (getRouteKey(currentRoute) === getRouteKey(nextRoute)) {
+        return currentRoute;
+      }
+      return nextRoute;
+    });
+  }, []);
+
+  return { route, setRoute, activeRouteKey };
+}
+
+function usePersistentRoutes(activeRoute: Route) {
+  const routeCacheRef = useRef<Record<string, Route>>({});
+  const [visitedRouteKeys, setVisitedRouteKeys] = useState<string[]>([]);
+  const activeRouteKey = getRouteKey(activeRoute);
+
+  useEffect(() => {
+    routeCacheRef.current[activeRouteKey] = activeRoute;
+    setVisitedRouteKeys((previousKeys) =>
+      previousKeys.includes(activeRouteKey) ? previousKeys : [...previousKeys, activeRouteKey],
+    );
+  }, [activeRoute, activeRouteKey]);
+
+  return {
+    activeRouteKey,
+    getCachedRoute: (routeKey: string) => routeCacheRef.current[routeKey],
+    visitedRouteKeys,
+  };
+}
+
 function App() {
   const [user, setUser] = useState<any>(null);
   const [authReady, setAuthReady] = useState(false);
-  const [route, setRoute] = useState<Route>({ type: 'dashboard' });
+  const { route, setRoute, activeRouteKey: stableActiveRouteKey } = useStableRouteState({ type: 'dashboard' });
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [streakCount, setStreakCount] = useState(0);
   const [notificationCount, setNotificationCount] = useState(0);
@@ -63,33 +123,12 @@ function App() {
   const [isAccessibilityAudioPlaying, setIsAccessibilityAudioPlaying] = useState(false);
   const [suppressedNarrationRouteKey, setSuppressedNarrationRouteKey] = useState<string | null>(null);
   const narrationRequestId = useRef(0);
-
-  const getRouteNarrationKey = useCallback((currentRoute: Route) => {
-    switch (currentRoute.type) {
-      case 'dashboard':
-      case 'whiteboard':
-      case 'notes':
-      case 'weak-areas':
-      case 'progress-analytics':
-      case 'study-tools':
-      case 'settings':
-        return currentRoute.type;
-      case 'socratic-tutor':
-        return `socratic-tutor:${JSON.stringify(currentRoute.context || {})}`;
-      case 'study-tool':
-        return `study-tool:${currentRoute.tool}:${currentRoute.subjectId || ''}`;
-      case 'subject':
-        return `subject:${currentRoute.subjectId}`;
-      case 'assignment':
-        return `assignment:${currentRoute.subjectId}:${currentRoute.assignmentId}`;
-      case 'problem':
-        return `problem:${currentRoute.subjectId}:${currentRoute.assignmentId}:${currentRoute.problemIndex}`;
-      default:
-        return 'unknown';
-    }
-  }, []);
-
-  const currentRouteNarrationKey = getRouteNarrationKey(route);
+  const {
+    activeRouteKey,
+    getCachedRoute,
+    visitedRouteKeys,
+  } = usePersistentRoutes(route);
+  const currentRouteNarrationKey = stableActiveRouteKey;
 
   useEffect(() => {
     getCurrentUser()
@@ -151,6 +190,7 @@ function App() {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         if (cancelled) return;
+        applyAccessibilitySettings(userSettings);
         void syncAppLanguage(userSettings).catch((error) => {
           console.error("Failed to sync app language:", error);
         });
@@ -239,7 +279,7 @@ function App() {
   }, []);
 
   const handleToggleAccessibilityAudio = useCallback(() => {
-    const routeKey = getRouteNarrationKey(route);
+    const routeKey = getRouteKey(route);
 
     if (isAccessibilityAudioPlaying) {
       narrationRequestId.current += 1;
@@ -259,7 +299,7 @@ function App() {
     }).catch((error) => {
       console.error("Accessibility speech playback failed:", error);
     });
-  }, [getRouteNarrationKey, isAccessibilityAudioPlaying, route, userSettings]);
+  }, [isAccessibilityAudioPlaying, route, userSettings]);
 
   const navigate = useCallback((page: string) => {
     if (page === 'dashboard') {
@@ -325,6 +365,18 @@ function App() {
     [],
   );
 
+  const openSettings = useCallback(() => {
+    setRoute({ type: 'settings' });
+  }, [setRoute]);
+
+  const openWhiteboard = useCallback(() => {
+    setRoute({ type: 'whiteboard' });
+  }, [setRoute]);
+
+  const openNotes = useCallback(() => {
+    setRoute({ type: 'notes' });
+  }, [setRoute]);
+
   if (!authReady) {
     return (
       <div style={{
@@ -374,7 +426,7 @@ function App() {
           user={user}
           onSignOut={handleSignOut}
           onDeleteAccount={handleDeleteAccount}
-          onOpenSettings={() => setRoute({ type: 'settings' })}
+          onOpenSettings={openSettings}
           onStopAudio={handleToggleAccessibilityAudio}
           showAudioControl={userSettings.textToSpeechEnabled || route.type === 'socratic-tutor' || isAccessibilityAudioPlaying}
           isAudioPlaying={isAccessibilityAudioPlaying}
@@ -383,77 +435,105 @@ function App() {
           notificationCount={notificationCount}
         />
 
-        {route.type === 'dashboard' && (
-          <DashboardPage
-            user={user}
-            onOpenWhiteboard={() => setRoute({ type: 'whiteboard' })}
-            onOpenNotes={() => setRoute({ type: 'notes' })}
-            onOpenStudyTool={openStudyTool}
-            onDashboardMetaChange={handleDashboardMetaChange}
-          />
-        )}
+        {visitedRouteKeys.map((routeKey) => {
+          const cachedRoute = getCachedRoute(routeKey);
+          if (!cachedRoute) {
+            return null;
+          }
 
-        {route.type === 'whiteboard' && (
-          <WhiteboardPage onOpenSubject={openSubject} />
-        )}
+          const isActive = routeKey === activeRouteKey;
+          let pageContent: React.ReactNode = null;
 
-        {route.type === 'notes' && <MyNotesPage onOpenTool={openStudyTool} />}
+          if (cachedRoute.type === 'dashboard') {
+            pageContent = (
+              <DashboardPage
+                user={user}
+                onOpenWhiteboard={openWhiteboard}
+                onOpenNotes={openNotes}
+                onOpenStudyTool={openStudyTool}
+                onDashboardMetaChange={handleDashboardMetaChange}
+              />
+            );
+          } else if (cachedRoute.type === 'whiteboard') {
+            pageContent = <WhiteboardPage onOpenSubject={openSubject} />;
+          } else if (cachedRoute.type === 'notes') {
+            pageContent = <MyNotesPage onOpenTool={openStudyTool} />;
+          } else if (cachedRoute.type === 'weak-areas') {
+            pageContent = <WeakAreasPage />;
+          } else if (cachedRoute.type === 'progress-analytics') {
+            pageContent = <ProgressAnalyticsPage />;
+          } else if (cachedRoute.type === 'study-tools') {
+            pageContent = <StudyToolsHubPage onOpenStudyTool={openStudyToolFromHub} />;
+          } else if (cachedRoute.type === 'settings') {
+            pageContent = (
+              <SettingsPage
+                user={user}
+                settings={userSettings}
+                onSettingsChange={handleSettingsChange}
+              />
+            );
+          } else if (cachedRoute.type === 'socratic-tutor') {
+            pageContent = (
+              <div className="socratic-page-shell">
+                <SocraticTutorPage initialContext={cachedRoute.context as any} />
+              </div>
+            );
+          } else if (cachedRoute.type === 'study-tool') {
+            pageContent = (
+              <StudyToolPage
+                tool={cachedRoute.tool}
+                initialSubjectId={cachedRoute.subjectId}
+                onBack={() =>
+                  setRoute({
+                    type: cachedRoute.backTo === 'study-tools' ? 'study-tools' : 'notes',
+                  })
+                }
+              />
+            );
+          } else if (cachedRoute.type === 'subject') {
+            pageContent = (
+              <SubjectDetailPage
+                subjectId={cachedRoute.subjectId}
+                onBack={goBackToWhiteboard}
+                onOpenAssignment={(assignmentId) => openAssignment(cachedRoute.subjectId, assignmentId)}
+              />
+            );
+          } else if (cachedRoute.type === 'assignment') {
+            pageContent = (
+              <AssignmentDetailPage
+                subjectId={cachedRoute.subjectId}
+                assignmentId={cachedRoute.assignmentId}
+                onBack={() => goBackToSubject(cachedRoute.subjectId)}
+                onOpenProblem={(problemIndex) =>
+                  openProblem(cachedRoute.subjectId, cachedRoute.assignmentId, problemIndex)
+                }
+              />
+            );
+          } else if (cachedRoute.type === 'problem') {
+            pageContent = (
+              <ProblemBoardPage
+                subjectId={cachedRoute.subjectId}
+                assignmentId={cachedRoute.assignmentId}
+                problemIndex={cachedRoute.problemIndex}
+                onBack={() => openAssignment(cachedRoute.subjectId, cachedRoute.assignmentId)}
+              />
+            );
+          }
 
-        {route.type === 'weak-areas' && <WeakAreasPage />}
-
-        {route.type === 'progress-analytics' && <ProgressAnalyticsPage />}
-
-        {route.type === 'study-tools' && (
-          <StudyToolsHubPage onOpenStudyTool={openStudyToolFromHub} />
-        )}
-
-        {route.type === 'settings' && (
-          <SettingsPage
-            user={user}
-            settings={userSettings}
-            onSettingsChange={handleSettingsChange}
-          />
-        )}
-
-        {route.type === 'socratic-tutor' && (
-          <div className="socratic-page-shell">
-            <SocraticTutorPage initialContext={route.context as any} />
-          </div>
-        )}
-        
-        {route.type === 'study-tool' && (
-          <StudyToolPage
-            tool={route.tool}
-            initialSubjectId={route.subjectId}
-            onBack={() => setRoute({ type: route.backTo === 'study-tools' ? 'study-tools' : 'notes' })}
-          />
-        )}
-
-        {route.type === 'subject' && (
-          <SubjectDetailPage
-            subjectId={route.subjectId}
-            onBack={goBackToWhiteboard}
-            onOpenAssignment={(assignmentId) => openAssignment(route.subjectId, assignmentId)}
-          />
-        )}
-
-        {route.type === 'assignment' && (
-          <AssignmentDetailPage
-            subjectId={route.subjectId}
-            assignmentId={route.assignmentId}
-            onBack={() => goBackToSubject(route.subjectId)}
-            onOpenProblem={(problemIndex) => openProblem(route.subjectId, route.assignmentId, problemIndex)}
-          />
-        )}
-
-        {route.type === 'problem' && (
-          <ProblemBoardPage
-            subjectId={route.subjectId}
-            assignmentId={route.assignmentId}
-            problemIndex={route.problemIndex}
-            onBack={() => openAssignment(route.subjectId, route.assignmentId)}
-          />
-        )}
+          return (
+            <div
+              key={routeKey}
+              style={{
+                display: isActive ? 'block' : 'none',
+                height: isActive ? 'auto' : 0,
+                overflow: 'hidden',
+              }}
+              aria-hidden={!isActive}
+            >
+              {pageContent}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

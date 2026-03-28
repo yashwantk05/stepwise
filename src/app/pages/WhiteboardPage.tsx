@@ -58,8 +58,8 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
     <div className="app-content">
       <div className="welcome-section">
         <p className="eyebrow">AI Whiteboard</p>
-        <h1>My Subjects</h1>
-        <p>Create subjects and manage your problem-solving assignments.</p>
+        <h1 className="page-hero-title">My Subjects</h1>
+        <p className="page-hero-subtitle">Create subjects and manage your problem-solving assignments.</p>
       </div>
 
       <div className="form-section mb-3">
@@ -80,7 +80,7 @@ export function WhiteboardPage({ onOpenSubject }: WhiteboardPageProps) {
       </div>
 
       <div className="mb-4">
-        <h2 className="mb-2" style={{ fontSize: '20px', fontWeight: 600 }}>
+        <h2 className="page-section-title mb-2">
           My Notebooks
         </h2>
         {subjects.length === 0 ? (

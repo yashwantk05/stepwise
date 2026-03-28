@@ -328,8 +328,8 @@ export function WeakAreasPage() {
         <header className="weak-header">
           <div>
             <span className="weak-kicker">Performance Diagnostics</span>
-            <h1>Improvement Zones</h1>
-            <p>Diagnostics to identify and improve weak concepts</p>
+            <h1 className="page-hero-title">Improvement Zones</h1>
+            <p className="page-hero-subtitle">Diagnostics to identify and improve weak concepts</p>
           </div>
           <div className="weak-status-card">
             <TrendingDown size={18} />

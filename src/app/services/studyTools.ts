@@ -1,3 +1,5 @@
+import { getUserSettings } from "./storage";
+
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 const normalizeFlag = (value: unknown) => String(value || "").trim().toLowerCase();
@@ -71,6 +73,7 @@ export async function sendSocraticChat(
     images?: { base64: string; mimeType: string }[];
   }
 ) {
+  const { appLanguage } = getUserSettings();
   const response = await fetch(`${API_BASE}/socratic/chat`, {
     method: "POST",
     credentials: "include",
@@ -81,6 +84,7 @@ export async function sendSocraticChat(
     body: JSON.stringify({
       message,
       history,
+      appLanguage,
       ...options,
     }),
   });

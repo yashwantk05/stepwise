@@ -1,11 +1,17 @@
 import katex from "katex";
 import "katex/dist/katex.min.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Play, Square } from "lucide-react";
 import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@excalidraw/excalidraw/index.css";
 import { analyzeDrawing, isDebugImagesEnabled } from "../services/ai";
+import {
+  speakWithAzure,
+  stopAccessibilitySpeech,
+  subscribeAccessibilitySpeechState,
+} from "../services/accessibility";
 import {
   downloadAssignmentCaptureImageBlob,
   getAssignmentById,
@@ -19,7 +25,9 @@ import {
   downloadProblemImageBlob,
   downloadAssignmentPdfBlob,
   deleteProblemImage,
+  getUserSettings,
 } from "../services/storage";
+import { translateAppText } from "../services/translation";
 
 GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -34,6 +42,7 @@ const MAX_HINT_ITEMS = 3;
 const MAX_ERROR_ITEMS = 3;
 const MAX_SELECTION_INSIGHT_ITEMS = 1;
 const SIDEBAR_COLLAPSED_BREAKPOINT = Number.MAX_SAFE_INTEGER;
+const WHITEBOARD_AUTOSAVE_DELAY_MS = 2000;
 
 const getDefaultScene = () => ({
   elements: [],
@@ -490,6 +499,22 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const boardSelectionStartRef = useRef<any>(null);
   const hintLevelRef = useRef(1);
   const previousHintsRef = useRef<string[]>([]);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const lastSavedSceneRef = useRef<string>("");
+  const pendingAutosaveAfterCurrentRef = useRef(false);
+  const isAutosavingRef = useRef(false);
+  const [playingInsightId, setPlayingInsightId] = useState<string | null>(null);
+  const [isAutosaving, setIsAutosaving] = useState(false);
+
+  useEffect(() => subscribeAccessibilitySpeechState((active) => {
+    if (!active) {
+      setPlayingInsightId(null);
+    }
+  }), []);
+
+  useEffect(() => () => {
+    stopAccessibilitySpeech();
+  }, []);
 
   const clearProblemImageUrl = useCallback(() => {
     if (!problemImageUrlRef.current) return;
@@ -532,6 +557,71 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     previousHintsRef.current = [];
     hintLevelRef.current = 1;
   }, []);
+
+  const handleToggleInsightAudio = useCallback(async (insight: { id: string; title?: string; content: string }) => {
+    if (playingInsightId === insight.id) {
+      stopAccessibilitySpeech();
+      setPlayingInsightId(null);
+      return;
+    }
+
+    const settings = getUserSettings();
+    const rawSpeechText = [String(insight.title || "").trim(), String(insight.content || "").trim()]
+      .filter(Boolean)
+      .join(". ");
+
+    if (!rawSpeechText) {
+      return;
+    }
+
+    setPlayingInsightId(insight.id);
+    try {
+      const speechText = await translateAppText(rawSpeechText, settings.appLanguage);
+      await speakWithAzure(speechText, settings, {
+        sessionKey: `problem-insight:${assignmentId}:${problemIndex}:${insight.id}`,
+      });
+    } catch {
+      // The shared speech service already handles fallback and logging.
+    } finally {
+      setPlayingInsightId((current) => (current === insight.id ? null : current));
+    }
+  }, [assignmentId, playingInsightId, problemIndex]);
+
+  const persistScene = useCallback(async (source: "manual" | "autosave") => {
+    const serializedScene = JSON.stringify(latestSceneRef.current);
+    if (serializedScene === lastSavedSceneRef.current) {
+      return;
+    }
+
+    if (isAutosavingRef.current) {
+      pendingAutosaveAfterCurrentRef.current = true;
+      return;
+    }
+
+    isAutosavingRef.current = true;
+    setIsAutosaving(true);
+
+    try {
+      await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
+      lastSavedSceneRef.current = serializedScene;
+      setStatus(
+        source === "autosave"
+          ? `Auto-saved at ${new Date().toLocaleTimeString()}.`
+          : `Saved at ${new Date().toLocaleTimeString()}.`,
+      );
+    } finally {
+      isAutosavingRef.current = false;
+      setIsAutosaving(false);
+
+      if (pendingAutosaveAfterCurrentRef.current) {
+        pendingAutosaveAfterCurrentRef.current = false;
+        const nextSerializedScene = JSON.stringify(latestSceneRef.current);
+        if (nextSerializedScene !== lastSavedSceneRef.current) {
+          void persistScene("autosave");
+        }
+      }
+    }
+  }, [assignmentId, problemIndex]);
 
   const loadProblemImage = useCallback(async () => {
     const metadata = await getProblemImage(assignmentId, problemIndex);
@@ -641,6 +731,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       setInitialScene(scene);
       setSceneRevision((revision) => revision + 1);
       latestSceneRef.current = scene;
+      lastSavedSceneRef.current = JSON.stringify(scene);
       setHint("Start drawing to receive hints.");
       lastSnapshotRef.current = null;
       hintLevelRef.current = 1;
@@ -745,13 +836,21 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
 
   const handleChange = useCallback((elements: any, appState: any, files: any) => {
     latestSceneRef.current = getPersistedScene({ elements, appState, files });
+
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+    autosaveTimerRef.current = window.setTimeout(() => {
+      void persistScene("autosave");
+    }, WHITEBOARD_AUTOSAVE_DELAY_MS);
+
     if (analyzeTimerRef.current) {
       window.clearTimeout(analyzeTimerRef.current);
     }
     analyzeTimerRef.current = window.setTimeout(() => {
       void analyzeSceneForHint(elements, appState, files);
     }, 3000);
-  }, [analyzeSceneForHint]);
+  }, [analyzeSceneForHint, persistScene]);
 
   const scheduleExcalidrawRefresh = useCallback(() => {
     if (!excalidrawApiRef.current?.refresh) return;
@@ -782,6 +881,9 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       if (analyzeTimerRef.current) {
         window.clearTimeout(analyzeTimerRef.current);
       }
+      if (autosaveTimerRef.current) {
+        window.clearTimeout(autosaveTimerRef.current);
+      }
 
       if (problemImageUrlRef.current) {
         URL.revokeObjectURL(problemImageUrlRef.current);
@@ -802,8 +904,11 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   );
 
   const handleSave = async () => {
-    await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
-    setStatus(`Saved at ${new Date().toLocaleTimeString()}.`);
+    if (autosaveTimerRef.current) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    await persistScene("manual");
   };
 
   const handleOpenPicker = async () => {
@@ -1177,8 +1282,8 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
               >
                 Explain
               </button>
-              <button type="button" onClick={handleSave} className="btn-primary">
-                Save Drawing
+              <button type="button" onClick={handleSave} className="btn-primary" disabled={isAutosaving}>
+                {isAutosaving ? "Saving..." : "Save Drawing"}
               </button>
               <button type="button" className="outline" onClick={onBack}>
                 Back
@@ -1187,7 +1292,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           )}
           {selectionMode && (
             <>
-              <p className="subtle" style={{ fontSize: '0.85rem', maxWidth: '400px' }}>
+              <p className="subtle" style={{ fontSize: 'calc(0.85rem * var(--app-text-zoom))', maxWidth: '400px' }}>
                 For Calc/Explain, first choose the tool, then drag on the whiteboard to select a portion.
               </p>
               <button
@@ -1333,7 +1438,28 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                 <h3>Errors</h3>
                 {wrongInsights.map((insight) => (
                   <details key={insight.id} className="insight-item insight-item-wrong" open>
-                    <summary>{insight.title || "Error Found"}</summary>
+                    <summary>
+                      <span className="insight-summary-title">{insight.title || "Error Found"}</span>
+                      <span className="insight-summary-controls">
+                        <button
+                          type="button"
+                          className={`btn-secondary btn-sm insight-audio-button ${
+                            playingInsightId === insight.id ? "is-playing" : ""
+                          }`}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleToggleInsightAudio(insight);
+                          }}
+                          aria-label={playingInsightId === insight.id ? "Stop error audio" : "Play error audio"}
+                          title={playingInsightId === insight.id ? "Stop audio" : "Play audio"}
+                        >
+                          {playingInsightId === insight.id ? <Square size={13} /> : <Play size={14} />}
+                          {playingInsightId === insight.id ? "Stop" : "Play"}
+                        </button>
+                        <span className="insight-summary-toggle" aria-hidden="true" />
+                      </span>
+                    </summary>
                     <LatexText text={insight.content} as="p" />
                   </details>
                 ))}
@@ -1355,12 +1481,33 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
                     }`}
                   >
                     <summary>
-                      {insight.title ||
-                        (insight.kind === "calculate"
-                          ? "Calculated Result"
-                          : insight.kind === "explain"
-                            ? "Explained Selection"
-                            : "Hint")}
+                      <span className="insight-summary-title">
+                        {insight.title ||
+                          (insight.kind === "calculate"
+                            ? "Calculated Result"
+                            : insight.kind === "explain"
+                              ? "Explained Selection"
+                              : "Hint")}
+                      </span>
+                      <span className="insight-summary-controls">
+                        <button
+                          type="button"
+                          className={`btn-secondary btn-sm insight-audio-button ${
+                            playingInsightId === insight.id ? "is-playing" : ""
+                          }`}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void handleToggleInsightAudio(insight);
+                          }}
+                          aria-label={playingInsightId === insight.id ? "Stop insight audio" : "Play insight audio"}
+                          title={playingInsightId === insight.id ? "Stop audio" : "Play audio"}
+                        >
+                          {playingInsightId === insight.id ? <Square size={13} /> : <Play size={14} />}
+                          {playingInsightId === insight.id ? "Stop" : "Play"}
+                        </button>
+                        <span className="insight-summary-toggle" aria-hidden="true" />
+                      </span>
                     </summary>
                     <LatexText text={insight.content} as="p" />
                   </details>

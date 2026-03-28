@@ -310,8 +310,8 @@ export function ProgressAnalyticsPage() {
       <section className="progress-analytics-page">
         <header className="progress-header">
           <div>
-            <h1>Progress Analytics</h1>
-            <p>Track your learning journey and improvements</p>
+            <h1 className="page-hero-title">Progress Analytics</h1>
+            <p className="page-hero-subtitle">Track your learning journey and improvements</p>
           </div>
         </header>
 

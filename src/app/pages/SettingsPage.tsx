@@ -168,8 +168,8 @@ export function SettingsPage({ user, settings, onSettingsChange }: SettingsPageP
     <main className="settings-page accessibility-settings-page">
       <section className="settings-hero">
         <span className="settings-eyebrow">Accessibility Settings</span>
-        <h1>Make Stepwise easier to hear, read, and navigate.</h1>
-        <p>
+        <h1 className="page-hero-title">Make Stepwise easier to hear, read, and navigate.</h1>
+        <p className="page-hero-subtitle">
           Adjust audio support, visual readability, and color themes with live controls that
           save to your profile.
         </p>

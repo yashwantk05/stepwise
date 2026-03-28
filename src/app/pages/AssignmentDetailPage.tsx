@@ -77,7 +77,26 @@ const buildVerticalFallbackDetections = (count: number) => {
   });
 };
 
-const buildSequentialProblemDetections = (
+const extractProblemNumber = (label: string) => {
+  const match = String(label || '').match(/\b(\d{1,2})\b/);
+  const value = Number(match?.[1]);
+  return Number.isInteger(value) && value > 0 ? value : null;
+};
+
+const calculateIntersectionArea = (
+  left: { x: number; y: number; width: number; height: number },
+  right: { x: number; y: number; width: number; height: number },
+) => {
+  const startX = Math.max(left.x, right.x);
+  const startY = Math.max(left.y, right.y);
+  const endX = Math.min(left.x + left.width, right.x + right.width);
+  const endY = Math.min(left.y + left.height, right.y + right.height);
+  const width = Math.max(0, endX - startX);
+  const height = Math.max(0, endY - startY);
+  return width * height;
+};
+
+const dedupeProblemDetections = (
   detections: Array<{
     label: string;
     bounds: { x: number; y: number; width: number; height: number };
@@ -86,33 +105,73 @@ const buildSequentialProblemDetections = (
   if (detections.length <= 1) return detections;
 
   const sorted = [...detections].sort((left, right) => {
+    const leftNumber = extractProblemNumber(left.label);
+    const rightNumber = extractProblemNumber(right.label);
+    if (leftNumber != null && rightNumber != null && leftNumber !== rightNumber) {
+      return leftNumber - rightNumber;
+    }
     if (left.bounds.y !== right.bounds.y) {
       return left.bounds.y - right.bounds.y;
     }
     return left.bounds.x - right.bounds.x;
   });
 
-  const horizontalMargin = 0.02;
-  const topPadding = 0.005;
-  const bottomPadding = 0.008;
+  const uniqueDetections: typeof detections = [];
+  for (const detection of sorted) {
+    const area = detection.bounds.width * detection.bounds.height;
+    const hasHeavyOverlap = uniqueDetections.some((existing) => {
+      const intersectionArea = calculateIntersectionArea(existing.bounds, detection.bounds);
+      const smallerArea = Math.max(0.0001, Math.min(
+        existing.bounds.width * existing.bounds.height,
+        area,
+      ));
+      return intersectionArea / smallerArea > 0.72;
+    });
 
-  return sorted.map((detection, index) => {
-    const currentTop = Math.max(0, detection.bounds.y - topPadding);
-    const rawNextTop =
-      index < sorted.length - 1 ? sorted[index + 1].bounds.y - bottomPadding : 1;
-    const nextTop = Math.max(currentTop + 0.03, Math.min(1, rawNextTop));
-    const height = Math.min(1 - currentTop, nextTop - currentTop);
+    if (!hasHeavyOverlap) {
+      uniqueDetections.push(detection);
+    }
+  }
+
+  return uniqueDetections;
+};
+
+const buildPaddedProblemDetections = (
+  detections: Array<{
+    label: string;
+    bounds: { x: number; y: number; width: number; height: number };
+  }>,
+) => {
+  const deduped = dedupeProblemDetections(detections);
+  return deduped.map((detection) => {
+    const horizontalPadding = Math.min(0.02, detection.bounds.width * 0.18);
+    const verticalPadding = Math.min(0.018, detection.bounds.height * 0.22);
+    const nextX = Math.max(0, detection.bounds.x - horizontalPadding);
+    const nextY = Math.max(0, detection.bounds.y - verticalPadding);
+    const right = Math.min(1, detection.bounds.x + detection.bounds.width + horizontalPadding);
+    const bottom = Math.min(1, detection.bounds.y + detection.bounds.height + verticalPadding);
 
     return {
       label: detection.label,
+      sortNumber: extractProblemNumber(detection.label),
       bounds: {
-        x: horizontalMargin,
-        y: currentTop,
-        width: 1 - horizontalMargin * 2,
-        height,
+        x: nextX,
+        y: nextY,
+        width: Math.max(0.08, right - nextX),
+        height: Math.max(0.08, bottom - nextY),
       },
     };
-  });
+  }).sort((left, right) => {
+    if (left.sortNumber != null && right.sortNumber != null && left.sortNumber !== right.sortNumber) {
+      return left.sortNumber - right.sortNumber;
+    }
+    if (left.sortNumber != null && right.sortNumber == null) return -1;
+    if (left.sortNumber == null && right.sortNumber != null) return 1;
+    if (left.bounds.y !== right.bounds.y) {
+      return left.bounds.y - right.bounds.y;
+    }
+    return left.bounds.x - right.bounds.x;
+  }).map(({ sortNumber, ...detection }) => detection);
 };
 
 const cropProblemImage = async (
@@ -228,7 +287,7 @@ const buildDetectedProblemCrops = async (
 
     let effectiveDetections =
       detections.length > 0
-        ? buildSequentialProblemDetections(detections)
+        ? buildPaddedProblemDetections(detections)
         : [{ label: 'Problem 1', bounds: { x: 0, y: 0, width: 1, height: 1 } }];
 
     if (effectiveDetections.length <= 1) {
@@ -577,7 +636,7 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
         )}
         <p className="form-help">{status}</p>
         <hr style={{ margin: '12px 0 10px' }} />
-        <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>Image/Capture Channel</h3>
+        <h3 className="page-subsection-title">Image/Capture Channel</h3>
         <div className="form-row">
           <button
             type="button"
@@ -653,7 +712,7 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
       </div>
 
       <div>
-        <h2 className="mb-2" style={{ fontSize: '20px', fontWeight: 600 }}>
+        <h2 className="page-section-title mb-2">
           🎯 Problems
         </h2>
         <div className="cards-grid">
@@ -664,7 +723,7 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
               onClick={() => onOpenProblem(problemIndex)}
               style={{ cursor: 'pointer' }}
             >
-              <h2 style={{ fontSize: '18px' }}>{getProblemTitle(problemIndex)}</h2>
+              <h2>{getProblemTitle(problemIndex)}</h2>
               <p className="text-muted text-sm">Click to open whiteboard</p>
               <div className="card-actions">
                 <button

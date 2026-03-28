@@ -123,8 +123,8 @@ export function Topbar({
                 style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', marginBottom: '8px' }}
                 data-no-translate="true"
               >
-                <div style={{ fontWeight: 600, fontSize: '14px' }}>{user.name}</div>
-                <div style={{ fontSize: '12px', color: 'var(--muted)', marginTop: '2px' }}>{user.email}</div>
+                <div style={{ fontWeight: 600, fontSize: 'calc(14px * var(--app-text-zoom))' }}>{user.name}</div>
+                <div style={{ fontSize: 'calc(12px * var(--app-text-zoom))', color: 'var(--muted)', marginTop: '2px' }}>{user.email}</div>
               </div>
 
               <button onClick={handleOpenSettings}>

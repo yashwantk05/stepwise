@@ -42,8 +42,8 @@ export function StudyToolsHubPage({ onOpenStudyTool }: StudyToolsHubPageProps) {
   return (
     <main className="study-tools-hub-shell">
       <header className="study-tools-hub-header">
-        <h1>Study Tools</h1>
-        <p>Choose a tool to open its page.</p>
+        <h1 className="page-hero-title">Study Tools</h1>
+        <p className="page-hero-subtitle">Choose a tool to open its page.</p>
       </header>
 
       <section className="study-tools-hub-grid" aria-label="Study tools">

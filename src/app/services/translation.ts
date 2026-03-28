@@ -28,6 +28,11 @@ const attributeOriginals = new WeakMap<Element, Map<string, string>>();
 const translationCache = new Map<string, Map<string, string>>();
 
 let latestRunId = 0;
+let currentObservedLanguage = "en";
+let mutationObserver: MutationObserver | null = null;
+let translationFlushTimer = 0;
+let isApplyingObservedTranslation = false;
+const pendingRoots = new Set<ParentNode>();
 
 const canUseDevBypass = () => {
   const bypassFlag = normalizeFlag(import.meta.env.VITE_DEV_AUTH_BYPASS);
@@ -124,6 +129,18 @@ const rememberAttributeOriginal = (element: Element, attribute: string, value: s
   }
 };
 
+const disconnectTranslationObserver = () => {
+  if (mutationObserver) {
+    mutationObserver.disconnect();
+    mutationObserver = null;
+  }
+  if (translationFlushTimer) {
+    window.clearTimeout(translationFlushTimer);
+    translationFlushTimer = 0;
+  }
+  pendingRoots.clear();
+};
+
 const restoreOriginalLanguage = () => {
   const textNodes = collectTextNodes(document.body);
   textNodes.forEach((node) => {
@@ -213,15 +230,83 @@ const applyTranslationToRoot = async (root: ParentNode, languageCode: string, ru
   const translated = await translateTexts(textsToTranslate, language.code);
   if (runId !== latestRunId) return;
 
-  originalTextEntries.forEach((entry, index) => {
-    if (!entry.node.isConnected) return;
-    entry.node.textContent = translated[index] || entry.original;
+  isApplyingObservedTranslation = true;
+  try {
+    originalTextEntries.forEach((entry, index) => {
+      if (!entry.node.isConnected) return;
+      entry.node.textContent = translated[index] || entry.original;
+    });
+
+    const offset = originalTextEntries.length;
+    attributeEntries.forEach((entry, index) => {
+      if (!entry.element.isConnected) return;
+      entry.element.setAttribute(entry.attribute, translated[offset + index] || entry.original);
+    });
+  } finally {
+    isApplyingObservedTranslation = false;
+  }
+};
+
+const scheduleObservedTranslation = () => {
+  if (translationFlushTimer || currentObservedLanguage === "en") return;
+
+  translationFlushTimer = window.setTimeout(() => {
+    translationFlushTimer = 0;
+    const roots = Array.from(pendingRoots);
+    pendingRoots.clear();
+    const runId = latestRunId;
+
+    void Promise.all(
+      roots.map((root) =>
+        applyTranslationToRoot(root, currentObservedLanguage, runId).catch((error) => {
+          console.error("Failed to translate updated app content:", error);
+        }),
+      ),
+    );
+  }, 80);
+};
+
+const connectTranslationObserver = () => {
+  if (typeof document === "undefined" || !document.body || mutationObserver) return;
+
+  mutationObserver = new MutationObserver((mutations) => {
+    if (isApplyingObservedTranslation || currentObservedLanguage === "en") {
+      return;
+    }
+
+    mutations.forEach((mutation) => {
+      if (mutation.type === "childList") {
+        mutation.addedNodes.forEach((node) => {
+          if (node instanceof Text && node.parentElement) {
+            pendingRoots.add(node.parentElement);
+          } else if (node instanceof Element && !shouldSkipElement(node)) {
+            pendingRoots.add(node);
+          }
+        });
+        return;
+      }
+
+      if (mutation.type === "characterData" && mutation.target.parentElement) {
+        pendingRoots.add(mutation.target.parentElement);
+        return;
+      }
+
+      if (mutation.type === "attributes" && mutation.target instanceof Element) {
+        pendingRoots.add(mutation.target);
+      }
+    });
+
+    if (pendingRoots.size > 0) {
+      scheduleObservedTranslation();
+    }
   });
 
-  const offset = originalTextEntries.length;
-  attributeEntries.forEach((entry, index) => {
-    if (!entry.element.isConnected) return;
-    entry.element.setAttribute(entry.attribute, translated[offset + index] || entry.original);
+  mutationObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: [...TRANSLATABLE_ATTRIBUTES],
   });
 };
 
@@ -230,20 +315,34 @@ export const getSpeechLanguageCode = (settings: Pick<UserSettings, "appLanguage"
 
 export const getLanguageLabel = (languageCode: string) => getLanguageOption(languageCode).label;
 
+export const translateAppText = async (text: string, languageCode: string) => {
+  const normalizedText = String(text || "").trim();
+  const language = getLanguageOption(languageCode);
+  if (!normalizedText || language.code === "en") {
+    return normalizedText;
+  }
+
+  const [translated] = await translateTexts([normalizedText], language.code);
+  return String(translated || normalizedText).trim();
+};
+
 export const syncAppLanguage = async (settings: Pick<UserSettings, "appLanguage">) => {
   if (typeof document === "undefined") return;
 
   const nextLanguage = getLanguageOption(settings.appLanguage).code;
   latestRunId += 1;
   const runId = latestRunId;
+  currentObservedLanguage = nextLanguage;
 
   document.documentElement.lang = nextLanguage;
 
   if (nextLanguage === "en") {
+    disconnectTranslationObserver();
     restoreOriginalLanguage();
     return;
   }
 
+  connectTranslationObserver();
   await applyTranslationToRoot(document.body, nextLanguage, runId);
   if (runId !== latestRunId) return;
 };

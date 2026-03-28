@@ -7,11 +7,16 @@ export interface ConfidencePoint {
 }
 
 export function ConfidenceRadar({ data }: { data: ConfidencePoint[] }) {
+  const textZoom =
+    typeof window === 'undefined'
+      ? 1
+      : Number.parseFloat(getComputedStyle(document.body).getPropertyValue('--app-text-zoom')) || 1;
+
   return (
     <ResponsiveContainer width="100%" height={360}>
       <RadarChart data={data} outerRadius="62%">
         <PolarGrid stroke="#d1d5db" />
-        <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 13 }} />
+        <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 13 * textZoom }} />
         <Radar
           dataKey="confidence"
           stroke="#8b5cf6"

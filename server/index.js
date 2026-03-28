@@ -180,6 +180,65 @@ const shouldUseNotesSearchForQuery = ({ query, hasAudio, imageCount }) => {
   return { enabled: true, reason: "content_query" };
 };
 
+const APP_LANGUAGE_LABELS = {
+  en: "English",
+  es: "Spanish",
+  fr: "French",
+  de: "German",
+  hi: "Hindi",
+  te: "Telugu",
+  ta: "Tamil",
+};
+
+const getAppLanguageCode = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return APP_LANGUAGE_LABELS[normalized] ? normalized : "en";
+};
+
+const getAppLanguageInstruction = (languageCode, options = {}) => {
+  const normalized = getAppLanguageCode(languageCode);
+  if (normalized === "en") return "";
+
+  const languageLabel = APP_LANGUAGE_LABELS[normalized] || "English";
+  const preserveJson = options.preserveJson === true;
+  const preserveMath = options.preserveMath !== false;
+
+  const instructions = [`Respond entirely in ${languageLabel}.`];
+  if (preserveMath) {
+    instructions.push("Keep mathematical symbols, equations, and LaTeX notation unchanged where appropriate.");
+  }
+  if (preserveJson) {
+    instructions.push("Keep JSON field names and required output schema exactly as requested.");
+  }
+  return instructions.join(" ");
+};
+
+const getLocalizedMessage = (key, languageCode) => {
+  const normalized = getAppLanguageCode(languageCode);
+  const messages = {
+    unreadable_hint: {
+      en: "I couldn't read the step. Please rewrite it clearly and show the full equation or expression.",
+      es: "No pude leer el paso. Por favor, escríbelo con claridad y muestra la ecuación o expresión completa.",
+      fr: "Je n'ai pas pu lire l'étape. Réécris-la clairement et montre l'équation ou l'expression complète.",
+      de: "Ich konnte den Schritt nicht lesen. Bitte schreibe ihn deutlich und zeige die vollständige Gleichung oder den Ausdruck.",
+      hi: "मैं इस चरण को पढ़ नहीं सका। कृपया इसे साफ़-साफ़ दोबारा लिखें और पूरी समीकरण या व्यंजक दिखाएँ।",
+      te: "నేను ఈ దశను చదవలేకపోయాను. దయచేసి దీనిని స్పష్టంగా మళ్లీ వ్రాసి పూర్తి సమీకరణం లేదా వ్యక్తీకరణను చూపించండి.",
+      ta: "இந்த படியை நான் படிக்க முடியவில்லை. தயவுசெய்து இதை தெளிவாக மீண்டும் எழுதி முழு சமன்பாடு அல்லது வெளிப்பாட்டைக் காட்டுங்கள்.",
+    },
+    unreadable_calculation: {
+      en: "I could not reliably read the selected expression. Select a tighter area or write it more clearly.",
+      es: "No pude leer con confianza la expresión seleccionada. Selecciona un área más precisa o escríbela con más claridad.",
+      fr: "Je n'ai pas pu lire correctement l'expression sélectionnée. Sélectionne une zone plus précise ou écris-la plus clairement.",
+      de: "Ich konnte den ausgewählten Ausdruck nicht zuverlässig lesen. Wähle einen engeren Bereich oder schreibe ihn deutlicher.",
+      hi: "मैं चुनी गई अभिव्यक्ति को ठीक से पढ़ नहीं सका। थोड़ा छोटा क्षेत्र चुनें या इसे और साफ़ लिखें।",
+      te: "ఎంచుకున్న వ్యక్తీకరణను నేను నమ్మకంగా చదవలేకపోయాను. మరింత చిన్న భాగాన్ని ఎంచుకోండి లేదా దాన్ని ఇంకా స్పష్టంగా వ్రాయండి.",
+      ta: "தேர்ந்தெடுக்கப்பட்ட வெளிப்பாட்டை நான் நம்பத்தகுந்த வகையில் படிக்க முடியவில்லை. இன்னும் குறுகிய பகுதியைத் தேர்ந்தெடுக்கவும் அல்லது அதை மேலும் தெளிவாக எழுதவும்.",
+    },
+  };
+
+  return messages[key]?.[normalized] || messages[key]?.en || "";
+};
+
 const buildBoundedNoteContext = (searchResults) => {
   if (!Array.isArray(searchResults) || searchResults.length === 0) return "";
   const lines = ["Relevant notes context from student's notebook:"];
@@ -495,16 +554,26 @@ const formatProblemContextForHint = (rawContext) => {
   return lines.join("\n");
 };
 
-const buildUnreadableHint = (rawContext) => {
+const buildUnreadableHint = (rawContext, languageCode = "en") => {
   const parsed =
     rawContext && typeof rawContext === "object" && !Array.isArray(rawContext)
       ? rawContext
       : safeJsonParse(rawContext);
   const goal = parsed?.goal ? String(parsed.goal).trim() : "";
   if (goal) {
-    return `I couldn't read the step. Please rewrite it clearly and show how it moves toward: ${goal}.`;
+    const introByLanguage = {
+      en: "I couldn't read the step. Please rewrite it clearly and show how it moves toward:",
+      es: "No pude leer el paso. Por favor, escríbelo con claridad y muestra cómo avanza hacia:",
+      fr: "Je n'ai pas pu lire l'étape. Réécris-la clairement et montre comment elle mène à :",
+      de: "Ich konnte den Schritt nicht lesen. Bitte schreibe ihn deutlich und zeige, wie er zu Folgendem führt:",
+      hi: "मैं इस चरण को पढ़ नहीं सका। कृपया इसे साफ़-साफ़ दोबारा लिखें और दिखाएँ कि यह किस तरह यहाँ तक पहुँचता है:",
+      te: "నేను ఈ దశను చదవలేకపోయాను. దయచేసి దీనిని స్పష్టంగా మళ్లీ వ్రాసి ఇది ఈ లక్ష్యానికి ఎలా దారి తీస్తుందో చూపించండి:",
+      ta: "இந்த படியை நான் படிக்க முடியவில்லை. தயவுசெய்து இதை தெளிவாக மீண்டும் எழுதி இது எவ்வாறு இதை நோக்கிச் செல்கிறது என்பதை காட்டுங்கள்:",
+    };
+    const normalized = getAppLanguageCode(languageCode);
+    return `${introByLanguage[normalized] || introByLanguage.en} ${goal}.`;
   }
-  return "I couldn't read the step. Please rewrite it clearly and show the full equation or expression.";
+  return getLocalizedMessage("unreadable_hint", languageCode);
 };
 
 const isAzureDebugEnabled = () => {
@@ -626,6 +695,124 @@ const formatModerationMessage = (subject = "content") =>
   `This ${subject} could not be accepted because it may violate safety policy.`;
 
 const shouldBlockModerationResult = (result) => String(result?.action || "") === "block";
+
+const buildStudyFocusModerationReply = (languageCode = "en") => {
+  const normalized = getAppLanguageCode(languageCode);
+  const replies = {
+    en: "That question is not appropriate here. Please avoid such requests and focus on your studies, and I will gladly help with learning.",
+    es: "Esa pregunta no es apropiada aquí. Evita ese tipo de solicitudes y concéntrate en tus estudios; con gusto te ayudaré a aprender.",
+    fr: "Cette question n'est pas appropriée ici. Merci d'éviter ce type de demande et de rester concentré sur tes études, et je t'aiderai volontiers à apprendre.",
+    de: "Diese Frage ist hier nicht angemessen. Bitte vermeide solche Anfragen und konzentriere dich auf dein Lernen, dann helfe ich dir gern weiter.",
+    hi: "यह प्रश्न यहाँ उचित नहीं है। कृपया ऐसे सवाल न पूछें और अपनी पढ़ाई पर ध्यान दें, मैं खुशी से आपकी पढ़ाई में मदद करूंगा।",
+    te: "ఈ ప్రశ్న ఇక్కడ సరైనది కాదు. దయచేసి ఇలాంటి ప్రశ్నలు అడగకుండా చదువుపై దృష్టి పెట్టండి, నేను మీకు చదువులో సంతోషంగా సహాయం చేస్తాను.",
+    ta: "இந்த கேள்வி இங்கே பொருத்தமானது அல்ல. தயவுசெய்து இப்படிப்பட்ட கேள்விகளை தவிர்த்து படிப்பில் கவனம் செலுத்துங்கள்; நான் மகிழ்ச்சியுடன் உங்கள் படிப்புக்கு உதவுவேன்.",
+  };
+
+  return replies[normalized] || replies.en;
+};
+
+const buildNoteModerationMessage = () =>
+  "This note contains inappropriate or unrelated content. Please upload or save only relevant study notes and try again.";
+
+const NOTE_SAFETY_PATTERNS = [
+  {
+    label: "Violence or threats",
+    regex: /\b(kill|murder|shoot|stab|bomb|attack|hurt you|beat you|threaten)\b/i,
+  },
+  {
+    label: "Self-harm",
+    regex: /\b(suicide|self[-\s]?harm|cut myself|kill myself|end my life)\b/i,
+  },
+  {
+    label: "Sexual content",
+    regex: /\b(sex|sexual|nude|naked|porn|explicit)\b/i,
+  },
+  {
+    label: "Hate or abuse",
+    regex: /\b(hate\s+\w+|slur|racist|terrorist|idiot|stupid loser|worthless)\b/i,
+  },
+  {
+    label: "Drugs or substance abuse",
+    regex: /\b(cocaine|heroin|meth|weed|drugs|overdose)\b/i,
+  },
+  {
+    label: "Inappropriate harm-related question",
+    regex: /\b(can|could|should|how)\b[^.?!\n]{0,80}\b(cook|burn|hurt|kill|injure|harm)\b[^.?!\n]{0,80}\b(human|person|body|people)\b/i,
+  },
+  {
+    label: "Irrelevant inappropriate content",
+    regex: /\b(cook a human|human in a camp cooker|hurt a person|kill a person)\b/i,
+  },
+];
+
+const truncateExcerpt = (value, maxLength = 180) => {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+};
+
+const splitNoteIntoSafetySegments = (content) => {
+  const text = String(content || "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+
+  return text
+    .split(/(?<=[.?!])\s+|(?:--\s*\d+\s+of\s+\d+\s*--)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+};
+
+const extractFlaggedNoteSegments = (content, maxSegments = 5) => {
+  const matches = [];
+  const seen = new Set();
+  const segments = splitNoteIntoSafetySegments(content);
+
+  for (const line of segments) {
+    for (const pattern of NOTE_SAFETY_PATTERNS) {
+      if (!pattern.regex.test(line)) continue;
+      const excerpt = truncateExcerpt(line);
+      const key = `${pattern.label}:${excerpt.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      matches.push({
+        label: pattern.label,
+        excerpt,
+      });
+      if (matches.length >= maxSegments) {
+        return matches;
+      }
+    }
+  }
+
+  return matches;
+};
+
+const analyzeNoteContentSafety = async (content) => {
+  const moderation = await moderateTextInput(String(content || "").slice(0, 12000), "notes_insight_scan");
+  const flaggedSegments = extractFlaggedNoteSegments(content);
+  const detected =
+    moderation.action === "review" ||
+    moderation.action === "block" ||
+    moderation.reasonCodes.length > 0 ||
+    flaggedSegments.length > 0;
+
+  return {
+    detected,
+    action: moderation.action,
+    categories: Array.isArray(moderation.categories) ? moderation.categories : [],
+    reasonCodes: Array.isArray(moderation.reasonCodes) ? moderation.reasonCodes : [],
+    flaggedSegments,
+    message: detected
+      ? "Inappropriate or harmful content was detected in this note. This type of content should not be written in study notes."
+      : "",
+  };
+};
+
+const isLocallyUnsafeOrIrrelevantStudyMessage = (value) => {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  return NOTE_SAFETY_PATTERNS.some((pattern) => pattern.regex.test(text));
+};
 
 const requestAzureChatCompletion = async ({
   messages,
@@ -864,6 +1051,7 @@ const generateHintWithAzure = async ({
   studentAnalysis,
   hintLevel = 1,
   previousHints = [],
+  outputLanguage = "en",
 }) => {
   const analysis =
     studentAnalysis && typeof studentAnalysis === "object"
@@ -911,6 +1099,7 @@ Behavior:
 - Avoid generic advice if context is available.
 Never reveal the final answer unless hint level is 4.
 Maximum 2 sentences. Use LaTeX for equations.
+${getAppLanguageInstruction(outputLanguage)}
         `,
       },
     ],
@@ -921,6 +1110,7 @@ const generateErrorFeedbackWithAzure = async ({
   problemContext,
   drawingBuffer,
   drawingMimeType = "image/png",
+  outputLanguage = "en",
 }) => {
   const raw = await requestAzureChatCompletion({
     temperature: 0,
@@ -946,6 +1136,7 @@ Rules:
 - Do not provide hints, corrections, next steps, or the final answer.
 - Keep the error description short and specific.
 - Do not return JSON.
+${getAppLanguageInstruction(outputLanguage)}
             `.trim(),
           },
           createImageUrlPart(drawingBuffer, drawingMimeType),
@@ -977,6 +1168,7 @@ const calculateSelectionWithAzure = async ({
   drawingBuffer,
   drawingMimeType = "image/png",
   problemContext = "",
+  outputLanguage = "en",
 }) => {
   const raw = await requestAzureChatCompletion({
     temperature: 0,
@@ -1005,6 +1197,7 @@ Rules:
 - Do not guess missing symbols, numbers, or operators.
 - Simplify exact arithmetic when possible.
 - No explanation outside the JSON.
+${getAppLanguageInstruction(outputLanguage, { preserveJson: true })}
             `.trim(),
           },
           createImageUrlPart(drawingBuffer, drawingMimeType),
@@ -2264,11 +2457,20 @@ app.post("/api/notes/insights", requireAuth, async (request, response) => {
       title: title || "Untitled Note",
       content,
     });
+    const safety = await analyzeNoteContentSafety(content);
+    if (mode === "summary" && safety.detected) {
+      output.summary = `${output.summary ? `${output.summary} ` : ""}Inappropriate or irrelevant content was also detected in the note. Do not write such lines in study notes.`.trim();
+      output.revisionChecklist = [
+        "Remove any inappropriate or irrelevant lines from the note.",
+        ...output.revisionChecklist,
+      ].filter(Boolean);
+    }
 
     response.json({
       mode,
       subject,
       output,
+      safety,
     });
   } catch (error) {
     console.error("Note insight generation failed:", error.message);
@@ -2385,6 +2587,21 @@ app.post("/api/notebooks/:subjectId/notes", requireAuth, async (request, respons
     return;
   }
   try {
+    const noteModerationText = [title, content].filter(Boolean).join("\n\n").slice(0, 12000);
+    if (noteModerationText) {
+      const textModeration = await moderateTextInput(noteModerationText, "notes_text_create");
+      if (shouldBlockModerationResult(textModeration)) {
+        response.status(400).json({
+          message: buildNoteModerationMessage(),
+          moderation: {
+            action: textModeration.action,
+            reasonCodes: textModeration.reasonCodes,
+          },
+        });
+        return;
+      }
+    }
+
     const subject = await loadNotebookSubjectOrRespond(request, response);
     if (!subject) return;
     const note = await insertNotebookNote(request.user.id, request.params.subjectId, { title, content, tags, sourceType: "text" });
@@ -2423,6 +2640,21 @@ app.patch("/api/notebooks/:subjectId/notes/:noteId", requireAuth, async (request
   const content = request.body?.content != null ? String(request.body.content) : undefined;
   const tags = Array.isArray(request.body?.tags) ? request.body.tags : undefined;
   try {
+    const noteModerationText = [title, content].filter((value) => typeof value === "string" && value.trim()).join("\n\n").slice(0, 12000);
+    if (noteModerationText) {
+      const textModeration = await moderateTextInput(noteModerationText, "notes_text_update");
+      if (shouldBlockModerationResult(textModeration)) {
+        response.status(400).json({
+          message: buildNoteModerationMessage(),
+          moderation: {
+            action: textModeration.action,
+            reasonCodes: textModeration.reasonCodes,
+          },
+        });
+        return;
+      }
+    }
+
     const updated = await updateNotebookNote(request.user.id, request.params.noteId, { title, content, tags });
     if (!updated) { response.status(404).json({ message: "Note not found." }); return; }
     
@@ -2492,7 +2724,7 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
       );
       if (shouldBlockModerationResult(textModeration)) {
         response.status(400).json({
-          message: formatModerationMessage("PDF"),
+          message: buildNoteModerationMessage(),
           moderation: {
             action: textModeration.action,
             reasonCodes: textModeration.reasonCodes,
@@ -2511,7 +2743,7 @@ app.post("/api/notebooks/:subjectId/notes/upload-pdf", requireAuth, upload.singl
       );
       if (shouldBlockModerationResult(imageModeration)) {
         response.status(400).json({
-          message: formatModerationMessage("PDF"),
+          message: buildNoteModerationMessage(),
           moderation: {
             action: imageModeration.action,
             reasonCodes: imageModeration.reasonCodes,
@@ -2584,7 +2816,7 @@ app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.sin
     );
     if (shouldBlockModerationResult(imageModeration)) {
       response.status(400).json({
-        message: formatModerationMessage("notebook image"),
+        message: buildNoteModerationMessage(),
         moderation: {
           action: imageModeration.action,
           reasonCodes: imageModeration.reasonCodes,
@@ -2604,6 +2836,22 @@ app.post("/api/notebooks/:subjectId/notes/upload-image", requireAuth, upload.sin
     let extractedText = "";
     try { extractedText = await extractImageTextWithAzureOpenAI(file.buffer, file.mimetype); } catch (ocrErr) {
       console.error("OCR extraction failed, saving note without text:", ocrErr.message);
+    }
+    if (extractedText) {
+      const textModeration = await moderateTextInput(
+        extractedText.slice(0, 12000),
+        "notes_upload_image_text",
+      );
+      if (shouldBlockModerationResult(textModeration)) {
+        response.status(400).json({
+          message: buildNoteModerationMessage(),
+          moderation: {
+            action: textModeration.action,
+            reasonCodes: textModeration.reasonCodes,
+          },
+        });
+        return;
+      }
     }
     const title = String(request.body?.title || file.originalname || "Image Upload")
       .replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "Image Upload";
@@ -2766,6 +3014,7 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
   const rawClassLevel = Number(request.body?.classLevel);
   const classLevel =
     Number.isInteger(rawClassLevel) && rawClassLevel >= 1 && rawClassLevel <= 12 ? rawClassLevel : null;
+  const appLanguage = getAppLanguageCode(request.body?.appLanguage);
 
   if (!message && !audioBase64 && images.length === 0) {
     return response.status(400).json({ message: "Message, audio, or image is required." });
@@ -2773,10 +3022,24 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
 
   try {
     if (message) {
+      if (isLocallyUnsafeOrIrrelevantStudyMessage(message)) {
+        return response.json({
+          reply: buildStudyFocusModerationReply(appLanguage),
+          usedNotes: false,
+          usedNoteImages: false,
+          moderation: {
+            action: "review",
+            reasonCodes: ["local_irrelevant_or_harmful_content"],
+          },
+        });
+      }
+
       const textModeration = await moderateTextInput(message, "socratic_chat_message");
       if (shouldBlockModerationResult(textModeration)) {
-        return response.status(400).json({
-          message: formatModerationMessage("message"),
+        return response.json({
+          reply: buildStudyFocusModerationReply(appLanguage),
+          usedNotes: false,
+          usedNoteImages: false,
           moderation: {
             action: textModeration.action,
             reasonCodes: textModeration.reasonCodes,
@@ -2794,8 +3057,10 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
         `socratic_chat_image_${index + 1}`,
       );
       if (shouldBlockModerationResult(imageModeration)) {
-        return response.status(400).json({
-          message: formatModerationMessage("image"),
+        return response.json({
+          reply: buildStudyFocusModerationReply(appLanguage),
+          usedNotes: false,
+          usedNoteImages: false,
           moderation: {
             action: imageModeration.action,
             reasonCodes: imageModeration.reasonCodes,
@@ -2916,10 +3181,13 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
     const tutorInstruction =
       tutorId === "vaani"
         ? `You are Vaani, a straightforward tutor.
-Start with the direct answer, then explain briefly in practical language.`
-        : `You are Saarthi, a Socratic tutor aiming to help a student learn without giving away the direct answers.
-Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
-Do not reveal the final answer unless the student explicitly asks after trying.`;
+Give the direct answer first, then explain the reasoning clearly.
+Do not hold back the final answer once you are confident about the academic request.
+Avoid Socratic back-and-forth unless the student explicitly asks for step-by-step guidance.`
+        : `You are Saarthi, a Socratic tutor whose job is to guide the student toward the answer without giving it directly.
+Do not provide the final answer, final numeric result, or completed expression unless the student explicitly asks for the answer after making a real attempt.
+Ask targeted questions, point out the next step, and help the student think.
+If the student has not shown an attempt, begin with one small guiding step and one short follow-up question.`;
 
     const formattingInstruction =
       tutorId === "vaani"
@@ -2930,6 +3198,8 @@ Do not reveal the final answer unless the student explicitly asks after trying.`
         : `Formatting rules:
 - If response format is "steps": provide 3-4 numbered steps max, each concise, then 1 short check question.
 - If response format is "voice": provide at most 3 short sentences in spoken style.
+- Never start with the final answer.
+- Prefer a hint, a next step, or a question over a full solution.
 - Keep the full response compact and avoid long paragraphs.`;
 
     const systemPrompt = `${tutorInstruction}
@@ -2941,7 +3211,10 @@ If source images from the student's notebook are included in this conversation, 
 Current learning context: Topic: ${context.topic || "unknown"}.
 Selected tutor: ${tutorId === "vaani" ? "Vaani" : "Saarthi"}.
 Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
+Do not give the same generic reply to every question. Base your reply on the student's latest question, visible work, notes context, and tutor role.
+If the student's latest question changes, your response must change accordingly and address that exact question.
 ${formattingInstruction}
+${getAppLanguageInstruction(appLanguage)}
 
 ${noteContext}`;
 
@@ -3022,7 +3295,7 @@ ${noteContext}`;
 
     const replyModeration = await moderateTextInput(replyText, "socratic_chat_reply");
     const safeReplyText = shouldBlockModerationResult(replyModeration)
-      ? "I can help with the academic part of this, but I can't continue with that request."
+      ? buildStudyFocusModerationReply(appLanguage)
       : replyText;
 
     if (dbReady && threadId) {
@@ -3312,6 +3585,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       }
     }
     const mode = String(request.body?.mode || "hint").trim().toLowerCase();
+    const appLanguage = getAppLanguageCode(request.body?.appLanguage);
 
     if (mode === "calculate") {
       const formattedContext = formatProblemContextForHint(problemContext);
@@ -3319,6 +3593,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         drawingBuffer: file.buffer,
         drawingMimeType: file.mimetype || "image/png",
         problemContext: formattedContext,
+        outputLanguage: appLanguage,
       });
 
       return response.json({
@@ -3328,7 +3603,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         readable: calculated.readable,
         message: calculated.readable
           ? ""
-          : "I could not reliably read the selected expression. Select a tighter area or write it more clearly.",
+          : getLocalizedMessage("unreadable_calculation", appLanguage),
       });
     }
 
@@ -3342,7 +3617,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
           content: [
             {
               type: "text",
-              text: `Explain what the math expression or step in this image means.\n\nProblem context:\n${formattedContext || "None"}\n\nOne short paragraph. Use LaTeX for equations.`,
+              text: `Explain what the math expression or step in this image means.\n\nProblem context:\n${formattedContext || "None"}\n\nOne short paragraph. Use LaTeX for equations.\n${getAppLanguageInstruction(appLanguage)}`,
             },
             createImageUrlPart(file.buffer, file.mimetype || "image/png"),
           ],
@@ -3355,6 +3630,7 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       problemContext: formattedContext,
       drawingBuffer: file.buffer,
       drawingMimeType: file.mimetype || "image/png",
+      outputLanguage: appLanguage,
     });
 
     const hintLevel = Math.min(4, Math.max(1, Number(request.body?.hintLevel) || 1));
@@ -3397,12 +3673,13 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
         : [];
 
       hint = isUnreadableStep
-        ? buildUnreadableHint(problemContext)
+        ? buildUnreadableHint(problemContext, appLanguage)
         : await generateHintWithAzure({
             problemContext: formattedContext,
             studentAnalysis: analysis,
             hintLevel,
-            previousHints
+            previousHints,
+            outputLanguage: appLanguage,
           });
 
       if (hint && classifyHintAsError(hint)) {

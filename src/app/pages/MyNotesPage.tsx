@@ -46,6 +46,21 @@ interface SummaryInsight {
   revisionChecklist: string[];
 }
 
+interface NoteSafetyInsight {
+  detected: boolean;
+  action: string;
+  categories: Array<{
+    category: string;
+    severity: number;
+  }>;
+  reasonCodes: string[];
+  flaggedSegments: Array<{
+    label: string;
+    excerpt: string;
+  }>;
+  message: string;
+}
+
 interface FormulaInsight {
   formulas: Array<{
     name: string;
@@ -60,6 +75,65 @@ interface MistakeInsight {
     fix: string;
   }>;
 }
+
+interface NoteInsightResponse {
+  output: SummaryInsight | FormulaInsight | MistakeInsight;
+  safety?: NoteSafetyInsight;
+}
+
+const LOCAL_NOTE_SAFETY_PATTERNS = [
+  {
+    label: 'Inappropriate harm-related question',
+    regex: /\b(can|could|should|how)\b[^.?!\n]{0,80}\b(cook|burn|hurt|kill|injure|harm)\b[^.?!\n]{0,80}\b(human|person|body|people)\b/i,
+  },
+  {
+    label: 'Irrelevant inappropriate content',
+    regex: /\b(cook a human|human in a camp cooker|hurt a person|kill a person)\b/i,
+  },
+  {
+    label: 'Violence or threats',
+    regex: /\b(kill|murder|shoot|stab|bomb|attack|hurt you|beat you|threaten)\b/i,
+  },
+];
+
+const splitNoteIntoSegments = (value: string) =>
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/(?<=[.?!])\s+|(?:--\s*\d+\s+of\s+\d+\s*--)/)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+const buildLocalSafetyInsight = (content: string): NoteSafetyInsight | null => {
+  const seen = new Set<string>();
+  const flaggedSegments = splitNoteIntoSegments(content)
+    .flatMap((segment) =>
+      LOCAL_NOTE_SAFETY_PATTERNS
+        .filter((pattern) => pattern.regex.test(segment))
+        .map((pattern) => ({
+          label: pattern.label,
+          excerpt: segment.length > 180 ? `${segment.slice(0, 177).trimEnd()}...` : segment,
+        })),
+    )
+    .filter((segment) => {
+      const key = `${segment.label}:${segment.excerpt.toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 5);
+
+  if (flaggedSegments.length === 0) return null;
+
+  return {
+    detected: true,
+    action: 'review',
+    categories: [],
+    reasonCodes: [],
+    flaggedSegments,
+    message: 'Inappropriate or irrelevant content was detected in this note. Remove these lines and keep only study-related content.',
+  };
+};
 
 const defaultNoteContent = `Add your class notes here.
 
@@ -85,9 +159,11 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
   const [summaryInsight, setSummaryInsight] = useState<SummaryInsight | null>(null);
   const [formulaInsight, setFormulaInsight] = useState<FormulaInsight | null>(null);
   const [mistakeInsight, setMistakeInsight] = useState<MistakeInsight | null>(null);
+  const [noteSafetyInsight, setNoteSafetyInsight] = useState<NoteSafetyInsight | null>(null);
   const [uploadMessage, setUploadMessage] = useState('');
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  const liveNoteSafetyInsight = useMemo(() => buildLocalSafetyInsight(editorContent), [editorContent]);
 
 
   const loadSubjects = useCallback(async () => {
@@ -147,6 +223,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
       setSummaryInsight(null);
       setFormulaInsight(null);
       setMistakeInsight(null);
+      setNoteSafetyInsight(null);
       setInsightError('');
       setSaveMessage('');
       setUploadMessage('');
@@ -159,6 +236,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
     setSummaryInsight(null);
     setFormulaInsight(null);
     setMistakeInsight(null);
+    setNoteSafetyInsight(null);
     setInsightError('');
     setSaveMessage('');
     setUploadMessage('');
@@ -250,12 +328,14 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
 
     setInsightLoading(true);
     try {
-      const response = await generateNoteInsight(
+      const response = (await generateNoteInsight(
         mode,
         selectedSubject?.name || 'General',
         editorTitle || 'Untitled Note',
         editorContent,
-      );
+      )) as NoteInsightResponse;
+
+      setNoteSafetyInsight(response.safety || null);
 
       if (tab === 'summary') {
         setSummaryInsight(response.output as SummaryInsight);
@@ -324,14 +404,35 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
   };
 
   const renderEditorTabBody = () => {
+    const effectiveSafetyInsight = noteSafetyInsight?.detected ? noteSafetyInsight : liveNoteSafetyInsight;
+    const safetyBanner = effectiveSafetyInsight?.detected ? (
+      <div className="notes-safety-alert" role="alert">
+        <strong>Inappropriate or irrelevant content detected</strong>
+        <p>{effectiveSafetyInsight.message}</p>
+        {effectiveSafetyInsight.flaggedSegments.length > 0 ? (
+          <div className="notes-safety-list">
+            {effectiveSafetyInsight.flaggedSegments.map((segment) => (
+              <div key={`${segment.label}-${segment.excerpt}`} className="notes-safety-item">
+                <span>{segment.label}</span>
+                <mark>{segment.excerpt}</mark>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    ) : null;
+
     if (activeTab === 'notes') {
       return (
-        <textarea
-          className="notes-editor-textarea"
-          value={editorContent}
-          onChange={(e) => setEditorContent(e.target.value)}
-          placeholder="Write your notes here..."
-        />
+        <>
+          {safetyBanner}
+          <textarea
+            className="notes-editor-textarea"
+            value={editorContent}
+            onChange={(e) => setEditorContent(e.target.value)}
+            placeholder="Write your notes here..."
+          />
+        </>
       );
     }
 
@@ -347,6 +448,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
       return (
         <div className="notes-insight-panel">
           <h4>AI Summary</h4>
+          {safetyBanner}
           <p>{summaryInsight?.summary || 'No summary generated yet.'}</p>
           <div className="notes-insight-grid">
             <div>
@@ -407,8 +509,8 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
       <section className="notes-shell">
         <div className="notes-header">
           <div>
-            <h2>My Notes</h2>
-            <p>Smart notes with AI-powered organization</p>
+            <h2 className="page-hero-title">My Notes</h2>
+            <p className="page-hero-subtitle">Smart notes with AI-powered organization</p>
           </div>
           <button className="btn-primary" onClick={() => void handleCreateNote()} disabled={loading || !selectedSubjectId}>
             <Plus size={16} />

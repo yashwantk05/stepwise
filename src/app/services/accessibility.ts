@@ -16,6 +16,8 @@ let activePlayer: speechSdk.SpeakerAudioDestination | null = null;
 let currentSpeechText = "";
 let currentSpeechKey = "";
 let currentSpeechCursor = 0;
+let currentAppliedTextZoom = 1;
+let textZoomObserver: MutationObserver | null = null;
 const speechStateListeners = new Set<(active: boolean) => void>();
 
 const DEFAULT_FONT_STACK =
@@ -26,7 +28,68 @@ const DYSLEXIA_FONT_STACK =
 const mapFontScale = (value: number) => 0.92 + (value / 100) * 0.24;
 const mapSpeechRate = (value: number) => 0.7 + (value / 100) * 0.9;
 const mapUiScale = (enabled: boolean) => (enabled ? 1.08 : 1);
-const mapTextZoom = (value: number) => 0.94 + (value / 100) * 0.32;
+const mapTextZoom = (value: number) => 0.88 + (value / 100) * 0.24;
+
+const applyRenderedTextZoomToNode = (node: Element | HTMLElement | SVGElement, textZoom: number) => {
+  if (!(node instanceof HTMLElement || node instanceof SVGElement)) {
+    return;
+  }
+
+  const tagName = node.tagName.toLowerCase();
+  if (["img", "video", "canvas", "path"].includes(tagName)) {
+    return;
+  }
+
+  const computedFontSize = Number.parseFloat(window.getComputedStyle(node).fontSize);
+  if (!Number.isFinite(computedFontSize) || computedFontSize <= 0) {
+    return;
+  }
+
+  const storedBase = Number.parseFloat(node.getAttribute("data-base-font-size") || "");
+  const baseFontSize =
+    Number.isFinite(storedBase) && storedBase > 0
+      ? storedBase
+      : computedFontSize / Math.max(currentAppliedTextZoom, 0.01);
+
+  node.setAttribute("data-base-font-size", String(baseFontSize));
+  (node as HTMLElement).style.fontSize = `${Math.max(1, baseFontSize * textZoom)}px`;
+};
+
+const applyRenderedTextZoom = (textZoom: number, scope?: ParentNode) => {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+
+  const root = scope || document.body;
+  const targets = [document.body, ...Array.from(root.querySelectorAll("*"))];
+
+  targets.forEach((element) => {
+    applyRenderedTextZoomToNode(element, textZoom);
+  });
+
+  currentAppliedTextZoom = textZoom;
+};
+
+const ensureTextZoomObserver = (textZoom: number) => {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+
+  if (textZoomObserver) {
+    textZoomObserver.disconnect();
+  }
+
+  textZoomObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      mutation.addedNodes.forEach((addedNode) => {
+        if (!(addedNode instanceof Element)) return;
+        applyRenderedTextZoomToNode(addedNode, textZoom);
+        applyRenderedTextZoom(textZoom, addedNode);
+      });
+    }
+  });
+
+  textZoomObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
+};
 
 const emitSpeechState = (active: boolean) => {
   isAccessibilitySpeechActive = active;
@@ -43,6 +106,7 @@ const emitSpeechState = (active: boolean) => {
 export const applyAccessibilitySettings = (settings: UserSettings) => {
   const root = document.documentElement;
   const body = document.body;
+  const textZoom = mapTextZoom(settings.fontScale).toFixed(2);
 
   root.dataset.colorTheme = settings.colorTheme;
   root.lang = settings.appLanguage || "en";
@@ -53,11 +117,19 @@ export const applyAccessibilitySettings = (settings: UserSettings) => {
   body.classList.toggle("accessibility-focus-highlight", settings.focusHighlight);
   body.style.setProperty("--app-font-scale", mapFontScale(settings.fontScale).toFixed(2));
   body.style.setProperty("--app-ui-scale", mapUiScale(settings.largeUiMode).toFixed(2));
-  body.style.setProperty("--app-text-zoom", mapTextZoom(settings.fontScale).toFixed(2));
+  body.style.setProperty("--app-text-zoom", textZoom);
   body.style.setProperty(
     "--app-font-family",
     settings.dyslexiaFriendlyFont ? DYSLEXIA_FONT_STACK : DEFAULT_FONT_STACK,
   );
+
+  const numericTextZoom = Number.parseFloat(textZoom) || 1;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      applyRenderedTextZoom(numericTextZoom);
+      ensureTextZoomObserver(numericTextZoom);
+    });
+  });
 };
 
 export const playAccessibilityCue = (tone: "confirm" | "reset" = "confirm") => {
@@ -267,6 +339,7 @@ async function speakWithAzureSpeech(
   if (sessionId !== playbackSessionId) return;
 
   const speechConfig = speechSdk.SpeechConfig.fromAuthorizationToken(token, region);
+  speechConfig.speechSynthesisLanguage = getSpeechLanguageCode(settings);
   speechConfig.speechSynthesisVoiceName = resolveAccessibilityVoice(settings);
 
   const player = new speechSdk.SpeakerAudioDestination();

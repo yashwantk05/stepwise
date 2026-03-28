@@ -467,6 +467,14 @@ export const listSubjects = async (): Promise<Subject[]> => {
       saveSubjectsLocal(subjects);
       return subjects;
     }
+
+    const createdDefault = (await request("/notebooks/subjects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: DEFAULT_SUBJECT_NAME }),
+    })) as Subject;
+    saveSubjectsLocal([createdDefault]);
+    return [createdDefault];
   } catch {
     // Fall back to localStorage if server is unavailable
   }

@@ -460,7 +460,13 @@ function App() {
               />
             );
           } else if (cachedRoute.type === 'whiteboard') {
-            pageContent = <WhiteboardPage onOpenSubject={openSubject} />;
+            pageContent = (
+              <WhiteboardPage
+                onOpenSubject={openSubject}
+                onOpenAssignment={openAssignment}
+                onOpenProblem={openProblem}
+              />
+            );
           } else if (cachedRoute.type === 'notes') {
             pageContent = <MyNotesPage onOpenTool={openStudyTool} />;
           } else if (cachedRoute.type === 'weak-areas') {

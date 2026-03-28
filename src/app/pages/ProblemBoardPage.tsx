@@ -6,7 +6,8 @@ import { Excalidraw, MainMenu, exportToCanvas } from "@excalidraw/excalidraw";
 import { GlobalWorkerOptions, getDocument } from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "@excalidraw/excalidraw/index.css";
-import { analyzeDrawing, isDebugImagesEnabled } from "../services/ai";
+import { analyzeDrawing, isDebugImagesEnabled, simplifyQuestion } from "../services/ai";
+import { QuestionSimplifier } from "../components/QuestionSimplifier";
 import {
   speakWithAzure,
   stopAccessibilitySpeech,
@@ -463,6 +464,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   const [sceneRevision, setSceneRevision] = useState(0);
   const [problemImageMeta, setProblemImageMeta] = useState<any>(null);
   const [problemImageUrl, setProblemImageUrl] = useState("");
+  const [questionExplanationStatus, setQuestionExplanationStatus] = useState("");
   const [problemContextMeta, setProblemContextMeta] = useState<any>(null);
   const [answerKeyDraft, setAnswerKeyDraft] = useState("");
   const [isSavingAnswerKey, setIsSavingAnswerKey] = useState(false);
@@ -1249,6 +1251,29 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     setStatus("Removed problem image.");
   };
 
+  const handleSimplifyQuestion = useCallback(async () => {
+    if (!problemImageUrl) {
+      return "This question is asking you to look at the uploaded problem image first.";
+    }
+
+    setQuestionExplanationStatus("Reading question...");
+    try {
+      const blob = await downloadProblemImageBlob(assignmentId, problemIndex);
+      const result = await simplifyQuestion(blob, {
+        assignmentId,
+        problemIndex,
+      });
+      setQuestionExplanationStatus("");
+      return (
+        String(result?.explanation || "").trim() ||
+        "This question is asking you to identify what quantity or value the problem wants."
+      );
+    } catch {
+      setQuestionExplanationStatus("");
+      return "This question is asking you to identify the goal of the problem in simpler language.";
+    }
+  }, [assignmentId, problemImageUrl, problemIndex]);
+
   if (!assignment) {
     return (
       <div className="app-content">
@@ -1353,6 +1378,8 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           />
         )}
         {!problemImageUrl && <p className="subtle">No problem image set.</p>}
+        <QuestionSimplifier onOpen={handleSimplifyQuestion} />
+        {questionExplanationStatus ? <p className="subtle mt-1">{questionExplanationStatus}</p> : null}
       </section>
 
       <div className="whiteboard-stage">

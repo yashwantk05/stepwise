@@ -1225,6 +1225,53 @@ ${getAppLanguageInstruction(outputLanguage, { preserveJson: true })}
   }
 };
 
+const simplifyQuestionWithAzure = async ({
+  drawingBuffer,
+  drawingMimeType = "image/png",
+  problemContext = "",
+  outputLanguage = "en",
+}) => {
+  const raw = await requestAzureChatCompletion({
+    temperature: 0.2,
+    maxTokens: 120,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: `
+Read the math question shown in this image and rewrite only what the question is asking in simple language.
+
+Problem context:
+${problemContext || "None"}
+
+Return JSON only with this field:
+- explanation: a 1-2 line plain-language description starting with "This question is asking you to..."
+
+Rules:
+- Do not solve the problem.
+- Do not provide hints.
+- Do not give steps.
+- Do not guide the student.
+- Keep it short and clear.
+${getAppLanguageInstruction(outputLanguage, { preserveJson: true })}
+            `.trim(),
+          },
+          createImageUrlPart(drawingBuffer, drawingMimeType),
+        ],
+      },
+    ],
+  });
+
+  const parsed = parseJsonObject(raw, { explanation: "" });
+  return normalizeBoundedText(
+    String(parsed?.explanation || "").trim() ||
+      "This question is asking you to identify what value or result needs to be found.",
+    220,
+  );
+};
+
 const cleanJsonBlock = (value) =>
   String(value || "")
     .replace(/^```(?:json)?\s*/i, "")
@@ -3625,6 +3672,18 @@ app.post("/api/ai/analyze", requireAuth, upload.single("file"), async (request, 
       });
       return response.json({ explanation: raw });
     }
+
+    if (mode === "simplify-question") {
+      const formattedContext = formatProblemContextForHint(problemContext);
+      const explanation = await simplifyQuestionWithAzure({
+        drawingBuffer: file.buffer,
+        drawingMimeType: file.mimetype || "image/png",
+        problemContext: formattedContext,
+        outputLanguage: appLanguage,
+      });
+      return response.json({ explanation });
+    }
+
     const formattedContext = formatProblemContextForHint(problemContext);
     const errorCheck = await generateErrorFeedbackWithAzure({
       problemContext: formattedContext,

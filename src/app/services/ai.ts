@@ -3,7 +3,7 @@ import { getUserSettings } from "./storage";
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 const normalizeFlag = (value: unknown) => String(value || "").trim().toLowerCase();
 
-type AnalyzeMode = "explain" | "calculate";
+type AnalyzeMode = "explain" | "calculate" | "simplify-question";
 
 interface AnalyzeOptions {
   assignmentId?: string;
@@ -93,4 +93,11 @@ export async function analyzeDrawing(blob: Blob, options: AnalyzeOptions = {}) {
   }
 
   return response.json();
+}
+
+export async function simplifyQuestion(blob: Blob, options: AnalyzeOptions = {}) {
+  return analyzeDrawing(blob, {
+    ...options,
+    mode: "simplify-question",
+  });
 }

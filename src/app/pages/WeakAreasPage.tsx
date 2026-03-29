@@ -201,9 +201,11 @@ export function WeakAreasPage() {
               getErrorSummary('errorType', { assignmentId: assignment.id, limit: 20 }) as Promise<ErrorSummaryRecord[]>,
             ]);
 
-            progressRows.forEach((row) => {
-              totalMistakes += Math.max(0, Number(row.mistakeCount || 0));
-            });
+            const assignmentMistakesFromProgress = progressRows.reduce(
+              (sum, row) => sum + Math.max(0, Number(row.mistakeCount || 0)),
+              0,
+            );
+            let assignmentMistakesFromErrorSummary = 0;
 
             topicRows.forEach((row) => {
               const topic = normalizeLabel(row.key);
@@ -217,6 +219,7 @@ export function WeakAreasPage() {
               const normalizedKey = rawType.toLowerCase() || 'concept review';
               const count = Math.max(0, Number(row.count || 0));
               if (count <= 0) return;
+              assignmentMistakesFromErrorSummary += count;
 
               errorTypeCounts.set(normalizedKey, (errorTypeCounts.get(normalizedKey) || 0) + count);
               if (!groupedInsights.has(normalizedKey)) {
@@ -227,6 +230,10 @@ export function WeakAreasPage() {
                 });
               }
             });
+            totalMistakes += Math.max(
+              assignmentMistakesFromProgress,
+              assignmentMistakesFromErrorSummary,
+            );
 
             const problemIndexesWithMistakes = progressRows
               .filter((row) => Number(row.mistakeCount || 0) > 0)

@@ -3327,7 +3327,7 @@ ${noteContext}`;
 
     const replyText = await requestAzureChatCompletion({
       messages: promptMessages, 
-      maxTokens: 180, 
+      maxTokens: 420, 
       temperature: 0.5,
       debugTag: "socratic_chat",
       debugMeta: {

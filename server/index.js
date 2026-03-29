@@ -3126,14 +3126,26 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
       hasAudio: Boolean(audioBase64),
       imageCount: images.length,
     });
-    const searchResults = searchStrategy.enabled
+    const isSaarthiRoute = tutorId === "saarthi";
+    const searchResults = isSaarthiRoute
       ? await searchNotes(request.user.id, searchQuery, subjectId, 5)
-      : [];
-    
-    // Build text context from search results
-    const noteContext = buildBoundedNoteContext(searchResults);
+      : searchStrategy.enabled
+        ? await searchNotes(request.user.id, searchQuery, subjectId, 5)
+        : [];
 
-    const shouldRetrieveSourceImages = searchStrategy.enabled && shouldUseRetrievedSourceImages(searchQuery, images);
+    // Build text context from search results
+    const noteContext = isSaarthiRoute
+      ? searchResults && searchResults.length > 0
+        ? "Relevant notes context from student's notebook:\n" +
+          searchResults
+            .map((res, i) => `[${i + 1}] Title: ${res.title}\nContent snippet: ${res.chunkText}`)
+            .join("\n\n")
+        : ""
+      : buildBoundedNoteContext(searchResults);
+
+    const shouldRetrieveSourceImages = isSaarthiRoute
+      ? shouldUseRetrievedSourceImages(searchQuery, images)
+      : searchStrategy.enabled && shouldUseRetrievedSourceImages(searchQuery, images);
 
     // Fetch source images for multimodal context (image notes + PDF pages)
     const retrievedImages = [];
@@ -3218,8 +3230,8 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
         classLevel,
         tutorId,
         searchQueryChars: searchQuery.length,
-        searchEnabled: searchStrategy.enabled,
-        searchReason: searchStrategy.reason,
+        searchEnabled: isSaarthiRoute ? true : searchStrategy.enabled,
+        searchReason: isSaarthiRoute ? "legacy_socratic_route" : searchStrategy.reason,
         searchResultCount: searchResults.length,
         noteContextChars: noteContext.length,
         shouldRetrieveSourceImages,
@@ -3229,46 +3241,46 @@ app.post("/api/socratic/chat", requireAuth, async (request, response) => {
       });
     }
 
-    const tutorInstruction =
-      tutorId === "vaani"
-        ? `You are Vaani, a straightforward tutor.
+    const vaaniSystemPrompt = `You are Vaani, a straightforward tutor.
 Give the direct answer first, then explain the reasoning clearly.
 Do not hold back the final answer once you are confident about the academic request.
-Avoid Socratic back-and-forth unless the student explicitly asks for step-by-step guidance.`
-        : `You are Saarthi, a Socratic tutor whose job is to guide the student toward the answer without giving it directly.
-Do not provide the final answer, final numeric result, or completed expression unless the student explicitly asks for the answer after making a real attempt.
-Ask targeted questions, point out the next step, and help the student think.
-If the student has not shown an attempt, begin with one small guiding step and one short follow-up question.`;
-
-    const formattingInstruction =
-      tutorId === "vaani"
-        ? `Formatting rules:
-- Start with the direct answer or result.
-- Then give 2-4 short supporting steps or reasons.
-- Keep the full response compact and avoid long paragraphs.`
-        : `Formatting rules:
-- If response format is "steps": provide 3-4 numbered steps max, each concise, then 1 short check question.
-- If response format is "voice": provide at most 3 short sentences in spoken style.
-- Never start with the final answer.
-- Prefer a hint, a next step, or a question over a full solution.
-- Keep the full response compact and avoid long paragraphs.`;
-
-    const systemPrompt = `${tutorInstruction}
+Avoid Socratic back-and-forth unless the student explicitly asks for step-by-step guidance.
 Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
 If there is relevant notes context provided below, use it to provide personalized hints or references.
 If the student sends audio, transcribe their speech internally and respond to the content of what they said.
 If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and respond based on the visual content.
 If source images from the student's notebook are included in this conversation, use them to provide visual references and better explanations. Reference specific diagrams or figures when helpful.
 Current learning context: Topic: ${context.topic || "unknown"}.
-Selected tutor: ${tutorId === "vaani" ? "Vaani" : "Saarthi"}.
+Selected tutor: Vaani.
 Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
 Do not give the same generic reply to every question. Base your reply on the student's latest question, visible work, notes context, and tutor role.
 If the student's latest question changes, your response must change accordingly and address that exact question.
 Never translate, transliterate, or paraphrase notebook names or assignment names mentioned in user content, history, or note context.
-${formattingInstruction}
+Formatting rules:
+- Start with the direct answer or result.
+- Then give 2-4 short supporting steps or reasons.
+- Keep the full response compact and avoid long paragraphs.
 ${getAppLanguageInstruction(appLanguage, { preserveEntityNames: true })}
 
 ${noteContext}`;
+
+    const saarthiSystemPrompt = `You are a Socratic tutor aiming to help a student learn without giving away the direct answers.
+Ask probing questions, break down problems, and guide them to their own realization in 1-2 short sentences.
+Adjust your language, difficulty, and examples for this student's class level: ${classLevel ? `Class ${classLevel}` : "unknown"}.
+If there is relevant notes context provided below, use it to provide personalized hints or references, but still don't give away the direct answer.
+If the student sends audio, transcribe their speech internally and respond to the content of what they said.
+If the student attaches images, analyze them carefully. The images may contain math problems, handwritten work, diagrams, or textbook pages. Describe what you see and guide the student based on the visual content.
+If source images from the student's notebook are included in this conversation, use them to provide visual references and better explanations. Reference specific diagrams or figures when helpful.
+Current learning context: Topic: ${context.topic || "unknown"}.
+Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
+Formatting rules:
+- If response format is "steps": provide 3-4 numbered steps max, each concise, then 1 short check question.
+- If response format is "voice": provide at most 3 short sentences in spoken style.
+- Keep the full response compact and avoid long paragraphs.
+
+${noteContext}`;
+
+    const systemPrompt = tutorId === "vaani" ? vaaniSystemPrompt : saarthiSystemPrompt;
 
     // Build user content — multimodal when audio, user images, or retrieved images are present
     let userContent;
@@ -3335,8 +3347,8 @@ ${noteContext}`;
         threadId: threadId || null,
         historyCount: history.length,
         tutorId,
-        searchEnabled: searchStrategy.enabled,
-        searchReason: searchStrategy.reason,
+        searchEnabled: isSaarthiRoute ? true : searchStrategy.enabled,
+        searchReason: isSaarthiRoute ? "legacy_socratic_route" : searchStrategy.reason,
         searchResultCount: searchResults.length,
         noteContextChars: noteContext.length,
         uploadedImageCount: images.length,

@@ -631,20 +631,46 @@ const getContentSafetyConfig = () => ({
   failOpen: !["false", "0", "no"].includes(readEnv("CONTENT_SAFETY_FAIL_OPEN").toLowerCase()),
 });
 
+const parsePositiveInt = (value, fallback) => {
+  const parsed = Number.parseInt(String(value || "").trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const CONTENT_SAFETY_REQUEST_TIMEOUT_MS = parsePositiveInt(
+  readEnv("CONTENT_SAFETY_REQUEST_TIMEOUT_MS"),
+  10000,
+);
+const CONTENT_SAFETY_FAILURE_COOLDOWN_MS = parsePositiveInt(
+  readEnv("CONTENT_SAFETY_FAILURE_COOLDOWN_MS"),
+  60000,
+);
+let contentSafetyFailOpenUntil = 0;
+
 const moderateViaPythonService = async ({ path, payload, context, failOpenMessage }) => {
   const { endpoint, failOpen } = getContentSafetyConfig();
   if (!endpoint) {
     return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
   }
+  if (failOpen && Date.now() < contentSafetyFailOpenUntil) {
+    return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
+  }
 
   try {
-    const moderationResponse = await fetch(`${endpoint}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONTENT_SAFETY_REQUEST_TIMEOUT_MS);
+    let moderationResponse;
+    try {
+      moderationResponse = await fetch(`${endpoint}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     if (!moderationResponse.ok) {
       const detail = await moderationResponse.text().catch(() => "");
@@ -660,15 +686,24 @@ const moderateViaPythonService = async ({ path, payload, context, failOpenMessag
       reasonCodes: Array.isArray(result?.reasonCodes) ? result.reasonCodes : [],
     };
   } catch (error) {
+    const message =
+      error?.name === "AbortError"
+        ? `Moderation request timed out after ${CONTENT_SAFETY_REQUEST_TIMEOUT_MS}ms`
+        : error?.message || String(error);
+    if (failOpen) {
+      contentSafetyFailOpenUntil = Date.now() + CONTENT_SAFETY_FAILURE_COOLDOWN_MS;
+    }
     console.error(failOpenMessage || "Content Safety request failed:", {
       context,
-      message: error.message,
+      endpoint: `${endpoint}${path}`,
+      message,
       failOpen,
+      retryAfterMs: failOpen ? CONTENT_SAFETY_FAILURE_COOLDOWN_MS : 0,
     });
     if (failOpen) {
       return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
     }
-    throw error;
+    throw new Error(message);
   }
 };
 
@@ -902,7 +937,7 @@ const requestAzureChatCompletion = async ({
   const emptyMeta = {
     debugTag,
     requestId,
-    status: response.status,
+    status: 200,
     deployment,
     apiVersion,
     finishReason: choice?.finish_reason || "unknown",

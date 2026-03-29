@@ -55,7 +55,7 @@ export function HeatmapChart({ data }: HeatmapChartProps) {
               boxShadow: '0 14px 28px rgba(139, 92, 246, 0.12)',
             }}
           />
-          <Bar dataKey="score" radius={[0, 12, 12, 0]} barSize={26}>
+          <Bar dataKey="score" radius={[0, 12, 12, 0]} barSize={26} minPointSize={3}>
             {data.map((entry) => (
               <Cell key={entry.notebook} fill={getBarColor(entry.score)} />
             ))}

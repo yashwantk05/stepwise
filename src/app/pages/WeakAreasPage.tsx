@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Lightbulb, TrendingDown } from 'lucide-react';
+import { AlertTriangle, Lightbulb, TrendingUp } from 'lucide-react';
 import { HeatmapChart, HeatmapDatum } from '../components/HeatmapChart';
 import { InsightsAccordion, NotebookInsightData } from '../components/InsightsAccordion';
 import { WeakTopicCard } from '../components/WeakTopicCard';
@@ -30,7 +30,13 @@ interface ProblemProgressRecord {
 
 interface ErrorSummaryRecord {
   key?: string;
+  label?: string;
+  topic?: string;
+  concept?: string;
+  errorType?: string;
   count?: number;
+  mistakes?: number;
+  total?: number;
 }
 
 interface ProblemErrorItemRecord {
@@ -60,6 +66,10 @@ interface WeakTopic {
 }
 
 const normalizeLabel = (value: unknown) => String(value || '').trim();
+const parseSummaryKey = (row: ErrorSummaryRecord) =>
+  normalizeLabel(row.key || row.label || row.topic || row.concept || row.errorType);
+const parseSummaryCount = (row: ErrorSummaryRecord) =>
+  Math.max(0, Number(row.count ?? row.mistakes ?? row.total ?? 0));
 
 const formatErrorTypeTitle = (value: string) =>
   value
@@ -190,7 +200,15 @@ export function WeakAreasPage() {
 
           const topicCounts = new Map<string, number>();
           const errorTypeCounts = new Map<string, number>();
-          const groupedInsights = new Map<string, { title: string; errors: Set<string>; fixes: Set<string> }>();
+          const groupedInsights = new Map<
+            string,
+            {
+              title: string;
+              errors: Set<string>;
+              fixes: Set<string>;
+              topicMentions: Map<string, number>;
+            }
+          >();
 
           for (const assignment of assignments) {
             totalQuestions += Math.max(0, Number(assignment.problemCount) || 0);
@@ -208,16 +226,16 @@ export function WeakAreasPage() {
             let assignmentMistakesFromErrorSummary = 0;
 
             topicRows.forEach((row) => {
-              const topic = normalizeLabel(row.key);
-              const count = Math.max(0, Number(row.count || 0));
+              const topic = parseSummaryKey(row);
+              const count = parseSummaryCount(row);
               if (!topic || count <= 0) return;
               topicCounts.set(topic, (topicCounts.get(topic) || 0) + count);
             });
 
             errorTypeRows.forEach((row) => {
-              const rawType = normalizeLabel(row.key);
+              const rawType = parseSummaryKey(row);
               const normalizedKey = rawType.toLowerCase() || 'concept review';
-              const count = Math.max(0, Number(row.count || 0));
+              const count = parseSummaryCount(row);
               if (count <= 0) return;
               assignmentMistakesFromErrorSummary += count;
 
@@ -227,6 +245,7 @@ export function WeakAreasPage() {
                   title: formatErrorTypeTitle(rawType || normalizedKey),
                   errors: new Set<string>(),
                   fixes: new Set<string>(),
+                  topicMentions: new Map<string, number>(),
                 });
               }
             });
@@ -258,6 +277,7 @@ export function WeakAreasPage() {
                     title: formatErrorTypeTitle(rawType),
                     errors: new Set<string>(),
                     fixes: new Set<string>(),
+                    topicMentions: new Map<string, number>(),
                   });
                 }
 
@@ -274,6 +294,12 @@ export function WeakAreasPage() {
                   bucket.errors.add(`Error type: ${formatErrorTypeTitle(rawType)}`);
                 }
                 if (fix) bucket.fixes.add(fix);
+                const contextTopics = [...(item.topics || []), ...(item.concepts || [])]
+                  .map((value) => normalizeLabel(value))
+                  .filter(Boolean);
+                contextTopics.forEach((topic) => {
+                  bucket.topicMentions.set(topic, (bucket.topicMentions.get(topic) || 0) + 1);
+                });
               });
             });
           }
@@ -285,9 +311,12 @@ export function WeakAreasPage() {
             )
             .map(([key, value]) => {
               const resolvedCount = Math.max(errorTypeCounts.get(key) || 0, value.errors.size);
+              const topTopic = Array.from(value.topicMentions.entries())
+                .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
               return {
                 id: `${subject.id}-${key}`,
                 title: value.title,
+                topic: topTopic,
                 summary: buildInsightSummary(value.title, resolvedCount, value.errors.size),
                 count: resolvedCount,
                 uniqueErrors: value.errors.size,
@@ -316,7 +345,7 @@ export function WeakAreasPage() {
 
       const heatmap = notebookStats
         .filter((entry) => entry.totalMistakes > 0)
-        .map((entry) => ({ notebook: entry.notebook, score: Number(entry.score.toFixed(2)) }))
+        .map((entry) => ({ notebook: entry.notebook, score: entry.score }))
         .sort((left, right) => right.score - left.score);
 
       const topTopics = notebookStats
@@ -372,7 +401,7 @@ export function WeakAreasPage() {
             <p className="page-hero-subtitle">Diagnostics to identify and improve weak concepts</p>
           </div>
           <div className="weak-status-card">
-            <TrendingDown size={18} />
+            <TrendingUp size={18} />
             <div>
               <strong>{notebookCount}</strong>
               <span>{status}</span>

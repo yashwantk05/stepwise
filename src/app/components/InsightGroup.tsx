@@ -4,6 +4,7 @@ import { ChevronDown } from 'lucide-react';
 export interface InsightGroupData {
   id: string;
   title: string;
+  topic?: string;
   summary: string;
   count: number;
   uniqueErrors: number;
@@ -24,6 +25,11 @@ export function InsightGroup({ group }: InsightGroupProps) {
         <ChevronDown size={16} />
       </summary>
       <div className="learning-group-body">
+        {group.topic ? (
+          <p className="learning-insight-topic">
+            <strong>Topic:</strong> {group.topic}
+          </p>
+        ) : null}
         <p className="learning-insight-summary">{group.summary}</p>
         <div className="learning-insight-metrics">
           <span>

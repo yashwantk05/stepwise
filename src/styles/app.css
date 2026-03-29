@@ -3381,6 +3381,12 @@ textarea {
   animation: weakAccordionIn 0.2s ease;
 }
 
+.learning-insight-topic {
+  margin: 0 0 8px;
+  color: #475569;
+  font-size: 0.9rem;
+}
+
 .learning-insight-summary {
   margin: 0 0 12px;
   color: #1e293b;
@@ -5951,6 +5957,10 @@ html[data-color-theme="dark"] .whiteboard-info p {
 html[data-color-theme="dark"] .learning-insight-metrics span {
   background: rgb(15 23 42 / 0.7);
   color: #e2e8f0;
+}
+
+html[data-color-theme="dark"] .learning-insight-topic {
+  color: #cbd5e1;
 }
 
 html[data-color-theme="dark"] .learning-insight-section h4 {

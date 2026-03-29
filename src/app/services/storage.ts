@@ -247,19 +247,44 @@ const mapEasyAuthUser = (payload: unknown): User | null => {
   const claims = Array.isArray(principal.claims) ? principal.claims : [];
   const readClaim = (...types: string[]) =>
     claims.find((claim: AnyRecord) => types.includes(String(claim.typ)))?.val || "";
+  const looksLikeEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+  const getEmailLocalPart = (value: string) =>
+    (value.trim().split("@")[0] || "").replace(/[._-]+/g, " ").trim();
+  const resolveDisplayName = (email: string) => {
+    const givenName = String(
+      readClaim(
+        "given_name",
+        "givenname",
+        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname",
+      ) || "",
+    ).trim();
+    if (givenName) return givenName;
+
+    const fullName = String(
+      readClaim("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") || "",
+    ).trim();
+    if (fullName && !looksLikeEmail(fullName)) return fullName;
+
+    const userDetails = String(principal.userDetails || "").trim();
+    if (userDetails && !looksLikeEmail(userDetails)) return userDetails;
+
+    const fallbackFromEmail = getEmailLocalPart(email);
+    if (fallbackFromEmail) return fallbackFromEmail;
+    return "User";
+  };
+
+  const email = String(
+    readClaim(
+      "email",
+      "emails",
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+    ) || "",
+  );
 
   return {
     id: principal.userId,
-    name:
-      readClaim("name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") ||
-      principal.userDetails ||
-      "User",
-    email:
-      readClaim(
-        "email",
-        "emails",
-        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
-      ) || "",
+    name: resolveDisplayName(email),
+    email,
     provider: principal.identityProvider || "",
     avatarUrl:
       readClaim(

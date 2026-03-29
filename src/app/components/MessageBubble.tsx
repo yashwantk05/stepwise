@@ -18,6 +18,40 @@ interface MessageBubbleProps {
 const LATEX_SEGMENT_PATTERN =
   /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$[^$\n]+?\$)/g;
 const INLINE_MARKDOWN_PATTERN = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g;
+const MULTILINE_MATH_BLOCK_PATTERN =
+  /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\))/g;
+
+const normalizeMathBlocks = (value: string) =>
+  String(value || '').replace(MULTILINE_MATH_BLOCK_PATTERN, (segment) => {
+    if (!segment.includes('\n') && !segment.includes('\r')) return segment;
+
+    let open = '';
+    let close = '';
+    let body = segment;
+
+    if (segment.startsWith('$$') && segment.endsWith('$$')) {
+      open = '$$';
+      close = '$$';
+      body = segment.slice(2, -2);
+    } else if (segment.startsWith('\\[') && segment.endsWith('\\]')) {
+      open = '\\[';
+      close = '\\]';
+      body = segment.slice(2, -2);
+    } else if (segment.startsWith('\\(') && segment.endsWith('\\)')) {
+      open = '\\(';
+      close = '\\)';
+      body = segment.slice(2, -2);
+    }
+
+    const compactBody = body
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join(' ');
+
+    return `${open}${compactBody}${close}`;
+  });
 
 const renderMathSegment = (segment: string) => {
   let expression = segment;
@@ -114,7 +148,7 @@ const renderMultilineInline = (value: string, keyPrefix: string) => {
 };
 
 const renderMessageMarkdown = (value: string) => {
-  const lines = String(value || '').replace(/\r\n/g, '\n').split('\n');
+  const lines = normalizeMathBlocks(value).replace(/\r\n/g, '\n').split('\n');
   const blocks: React.ReactNode[] = [];
   let index = 0;
 

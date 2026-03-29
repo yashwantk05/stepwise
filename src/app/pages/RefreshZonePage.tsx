@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Gamepad2, Sparkles, TimerReset } from 'lucide-react';
-import { BouncyBall } from '../components/BouncyBall';
 import { Game2048 } from '../components/Game2048';
 import { GameCard } from '../components/GameCard';
 import { GameContainer } from '../components/GameContainer';
@@ -11,7 +10,7 @@ import { TimerDisplay } from '../components/TimerDisplay';
 import { trackEvent } from '../services/analytics';
 import { getLearningActivity } from '../services/storage';
 
-type GameId = 'sudoku' | '2048' | 'bouncy-ball' | null;
+type GameId = 'sudoku' | '2048' | null;
 
 const INITIAL_BONUS_SECONDS = 300;
 const REWARD_SECONDS = 300;
@@ -186,12 +185,6 @@ export function RefreshZonePage() {
               accent="linear-gradient(135deg, #f59e0b, #f97316)"
               onClick={() => handleGameStart('2048')}
             />
-            <GameCard
-              title="Bouncy Ball"
-              description="Keep the ball in play, increase the level, and squeeze in a quick reflex reset."
-              accent="linear-gradient(135deg, #34d399, #14b8a6)"
-              onClick={() => handleGameStart('bouncy-ball')}
-            />
           </div>
         ) : null}
 
@@ -207,11 +200,6 @@ export function RefreshZonePage() {
           </GameContainer>
         ) : null}
 
-        {activeGame === 'bouncy-ball' ? (
-          <GameContainer title="Bouncy Ball" subtitle="Move the paddle, keep the ball alive, and climb the speed levels." onBack={handleBackToGames}>
-            <BouncyBall onComplete={() => handleGameComplete('bouncy-ball')} />
-          </GameContainer>
-        ) : null}
       </div>
 
       <RewardPopup

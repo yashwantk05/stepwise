@@ -1967,22 +1967,56 @@ const parsePrincipalHeader = (headerValue) => {
 const readClaim = (claims = [], ...types) =>
   claims.find((claim) => types.includes(claim.typ))?.val || "";
 
+const looksLikeEmail = (value) =>
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+
+const getEmailLocalPart = (email) => {
+  const localPart = String(email || "").trim().split("@")[0] || "";
+  return localPart.replace(/[._-]+/g, " ").trim();
+};
+
+const resolveDisplayName = ({ claims = [], userDetails = "", email = "" }) => {
+  const givenName = readClaim(
+    claims,
+    "given_name",
+    "givenname",
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/givenname",
+  );
+  if (String(givenName || "").trim()) return String(givenName).trim();
+
+  const fullName = readClaim(
+    claims,
+    "name",
+    "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name",
+  );
+  if (String(fullName || "").trim() && !looksLikeEmail(fullName)) {
+    return String(fullName).trim();
+  }
+
+  if (String(userDetails || "").trim() && !looksLikeEmail(userDetails)) {
+    return String(userDetails).trim();
+  }
+
+  const fallbackFromEmail = getEmailLocalPart(email);
+  if (fallbackFromEmail) return fallbackFromEmail;
+  return "User";
+};
+
 const principalToUser = (principal) => {
   if (!principal?.userId) return null;
   const claims = Array.isArray(principal.claims) ? principal.claims : [];
+  const email =
+    readClaim(
+      claims,
+      "email",
+      "emails",
+      "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
+    ) || "";
+
   return {
     id: principal.userId,
-    name:
-      readClaim(claims, "name", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name") ||
-      principal.userDetails ||
-      "User",
-    email:
-      readClaim(
-        claims,
-        "email",
-        "emails",
-        "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
-      ) || "",
+    name: resolveDisplayName({ claims, userDetails: principal.userDetails, email }),
+    email,
     provider: principal.identityProvider || "",
     avatarUrl:
       readClaim(
@@ -2014,12 +2048,13 @@ const headersToUser = (request) => {
 
   const decodedPrincipal = parsePrincipalHeader(request.headers["x-ms-client-principal"]);
   const userFromPrincipal = principalToUser(decodedPrincipal);
-  const name = request.headers["x-ms-client-principal-name"] || "User";
+  const name = String(request.headers["x-ms-client-principal-name"] || "");
   const provider = request.headers["x-ms-client-principal-idp"] || "";
+  const email = String(userFromPrincipal?.email || name);
   return {
     id: String(userId),
-    name: String(userFromPrincipal?.name || name),
-    email: String(userFromPrincipal?.email || name),
+    name: String(userFromPrincipal?.name || resolveDisplayName({ userDetails: name, email })),
+    email,
     provider: String(provider),
     avatarUrl: String(userFromPrincipal?.avatarUrl || ""),
   };

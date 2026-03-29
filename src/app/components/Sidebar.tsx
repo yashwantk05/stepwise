@@ -48,7 +48,31 @@ export function Sidebar({
           onClick={() => handleNavigate('whiteboard')}
         >
           <span className="nav-icon"><PanelTopOpen size={20} /></span>
-          <span className="nav-label">AI Whiteboard</span>
+          <span className="nav-label">AI whiteboard</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'notes' ? 'active' : ''}`}
+          onClick={() => handleNavigate('notes')}
+        >
+          <span className="nav-icon"><NotebookPen size={20} /></span>
+          <span className="nav-label">My notes</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'study-tools' ? 'active' : ''}`}
+          onClick={() => handleNavigate('study-tools')}
+        >
+          <span className="nav-icon"><Shapes size={20} /></span>
+          <span className="nav-label">Study tools</span>
+        </button>
+
+        <button
+          className={`nav-item ${currentPage === 'socratic-tutor' ? 'active' : ''}`}
+          onClick={() => handleNavigate('socratic-tutor')}
+        >
+          <span className="nav-icon"><BrainCircuit size={20} /></span>
+          <span className="nav-label">Socratic tutoring</span>
         </button>
 
         <button
@@ -64,15 +88,7 @@ export function Sidebar({
           onClick={() => handleNavigate('progress-analytics')}
         >
           <span className="nav-icon"><BarChart3 size={20} /></span>
-          <span className="nav-label">Progress Analytics</span>
-        </button>
-
-        <button
-          className={`nav-item ${currentPage === 'socratic-tutor' ? 'active' : ''}`}
-          onClick={() => handleNavigate('socratic-tutor')}
-        >
-          <span className="nav-icon"><BrainCircuit size={20} /></span>
-          <span className="nav-label">Socratic Tutor</span>
+          <span className="nav-label">Progress analytics</span>
         </button>
 
         <button
@@ -81,22 +97,6 @@ export function Sidebar({
         >
           <span className="nav-icon"><Gamepad2 size={20} /></span>
           <span className="nav-label">Refresh Zone</span>
-        </button>
-
-        <button
-          className={`nav-item ${currentPage === 'notes' ? 'active' : ''}`}
-          onClick={() => handleNavigate('notes')}
-        >
-          <span className="nav-icon"><NotebookPen size={20} /></span>
-          <span className="nav-label">My Notes</span>
-        </button>
-
-        <button
-          className={`nav-item ${currentPage === 'study-tools' ? 'active' : ''}`}
-          onClick={() => handleNavigate('study-tools')}
-        >
-          <span className="nav-icon"><Shapes size={20} /></span>
-          <span className="nav-label">Study Tools</span>
         </button>
 
         <button

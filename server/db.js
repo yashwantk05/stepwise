@@ -382,6 +382,11 @@ export const initDb = async () => {
     `);
 
     await activePool.query(`
+      ALTER TABLE socratic_chat_messages
+      ADD COLUMN IF NOT EXISTS tutor_id TEXT;
+    `);
+
+    await activePool.query(`
       CREATE INDEX IF NOT EXISTS idx_socratic_chat_messages_user
       ON socratic_chat_messages (user_id, created_at DESC);
     `);
@@ -1925,6 +1930,7 @@ const mapSocraticChatMessage = (row) => ({
   threadId: row.thread_id,
   role: row.role === "assistant" ? "assistant" : "user",
   text: String(row.content || ""),
+  tutorId: row.tutor_id === "vaani" ? "vaani" : row.tutor_id === "saarthi" ? "saarthi" : null,
   createdAt: Number(row.created_at),
 });
 
@@ -1985,19 +1991,23 @@ export const removeSocraticChatThread = async (userId, threadId) => {
   return mapSocraticChatThread(rows[0]);
 };
 
-export const insertSocraticChatMessage = async (userId, { threadId, role, text, createdAt = Date.now() }) => {
+export const insertSocraticChatMessage = async (
+  userId,
+  { threadId, role, text, createdAt = Date.now(), tutorId = null },
+) => {
   const safeRole = role === "assistant" ? "assistant" : "user";
   const safeText = String(text || "").trim();
   const safeCreatedAt = Number.isFinite(Number(createdAt)) ? Number(createdAt) : Date.now();
+  const safeTutorId = tutorId === "vaani" || tutorId === "saarthi" ? tutorId : null;
   const id = `socratic-msg-${safeCreatedAt}-${Math.random().toString(36).slice(2, 10)}`;
   const safeThreadId = String(threadId || "").trim();
   const { rows } = await getPool().query(
     `
-      INSERT INTO socratic_chat_messages (id, user_id, thread_id, role, content, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING id, user_id, thread_id, role, content, created_at;
+      INSERT INTO socratic_chat_messages (id, user_id, thread_id, role, content, tutor_id, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING id, user_id, thread_id, role, content, tutor_id, created_at;
     `,
-    [id, userId, safeThreadId, safeRole, safeText, safeCreatedAt],
+    [id, userId, safeThreadId, safeRole, safeText, safeTutorId, safeCreatedAt],
   );
   await getPool().query(
     `
@@ -2020,9 +2030,9 @@ export const listSocraticChatMessages = async (userId, threadId, limit = 200) =>
   const safeThreadId = String(threadId || "").trim();
   const { rows } = await getPool().query(
     `
-      SELECT id, user_id, thread_id, role, content, created_at
+      SELECT id, user_id, thread_id, role, content, tutor_id, created_at
       FROM (
-        SELECT id, user_id, thread_id, role, content, created_at
+        SELECT id, user_id, thread_id, role, content, tutor_id, created_at
         FROM socratic_chat_messages
         WHERE user_id = $1 AND thread_id = $2
         ORDER BY created_at DESC

@@ -43,7 +43,7 @@ export function AssignmentDropdown({
           {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         </span>
         <span className="assignment-copy">
-          <strong>{assignment.title}</strong>
+          <strong data-no-translate="true">{assignment.title}</strong>
           <span>{assignment.problemCount} problems</span>
         </span>
         <span className="assignment-hint">Click again to open page</span>

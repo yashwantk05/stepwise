@@ -202,10 +202,14 @@ const getAppLanguageInstruction = (languageCode, options = {}) => {
   const languageLabel = APP_LANGUAGE_LABELS[normalized] || "English";
   const preserveJson = options.preserveJson === true;
   const preserveMath = options.preserveMath !== false;
+  const preserveEntityNames = options.preserveEntityNames === true;
 
   const instructions = [`Respond entirely in ${languageLabel}.`];
   if (preserveMath) {
     instructions.push("Keep mathematical symbols, equations, and LaTeX notation unchanged where appropriate.");
+  }
+  if (preserveEntityNames) {
+    instructions.push("Keep notebook names and assignment names exactly as provided. Do not translate, transliterate, or paraphrase those names.");
   }
   if (preserveJson) {
     instructions.push("Keep JSON field names and required output schema exactly as requested.");
@@ -3260,8 +3264,9 @@ Selected tutor: ${tutorId === "vaani" ? "Vaani" : "Saarthi"}.
 Preferred response format: ${context.responseFormat === "voice" ? "voice (short, conversational, easy to speak aloud)." : "steps (clear numbered steps)."}
 Do not give the same generic reply to every question. Base your reply on the student's latest question, visible work, notes context, and tutor role.
 If the student's latest question changes, your response must change accordingly and address that exact question.
+Never translate, transliterate, or paraphrase notebook names or assignment names mentioned in user content, history, or note context.
 ${formattingInstruction}
-${getAppLanguageInstruction(appLanguage)}
+${getAppLanguageInstruction(appLanguage, { preserveEntityNames: true })}
 
 ${noteContext}`;
 
@@ -3360,6 +3365,7 @@ ${noteContext}`;
         threadId,
         role: "assistant",
         text: safeReplyText,
+        tutorId,
         createdAt: now + 1,
       }).catch((persistError) => {
         console.warn("Failed to persist Socratic assistant message:", persistError.message);

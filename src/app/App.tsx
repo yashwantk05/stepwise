@@ -54,6 +54,15 @@ type Route =
   | { type: 'assignment'; subjectId: string; assignmentId: string }
   | { type: 'problem'; subjectId: string; assignmentId: string; problemIndex: number };
 
+function isWhiteboardRoute(routeToCheck: Route) {
+  return (
+    routeToCheck.type === 'whiteboard' ||
+    routeToCheck.type === 'subject' ||
+    routeToCheck.type === 'assignment' ||
+    routeToCheck.type === 'problem'
+  );
+}
+
 function getRouteKey(routeToKey: Route) {
   switch (routeToKey.type) {
     case 'dashboard':
@@ -124,6 +133,7 @@ function App() {
   const [userSettings, setUserSettings] = useState<UserSettings>(DEFAULT_USER_SETTINGS);
   const [isAccessibilityAudioPlaying, setIsAccessibilityAudioPlaying] = useState(false);
   const [suppressedNarrationRouteKey, setSuppressedNarrationRouteKey] = useState<string | null>(null);
+  const lastWhiteboardRouteRef = useRef<Route>({ type: 'whiteboard' });
   const narrationRequestId = useRef(0);
   const {
     activeRouteKey,
@@ -260,6 +270,12 @@ function App() {
     }
   }, [currentRouteNarrationKey, suppressedNarrationRouteKey]);
 
+  useEffect(() => {
+    if (isWhiteboardRoute(route)) {
+      lastWhiteboardRouteRef.current = route;
+    }
+  }, [route]);
+
   const handleSignOut = useCallback(async () => {
     await signOut();
     setUser(null);
@@ -307,7 +323,7 @@ function App() {
     if (page === 'dashboard') {
       setRoute({ type: 'dashboard' });
     } else if (page === 'whiteboard') {
-      setRoute({ type: 'whiteboard' });
+      setRoute(lastWhiteboardRouteRef.current);
     } else if (page === 'notes') {
       setRoute({ type: 'notes' });
     } else if (page === 'weak-areas') {
@@ -331,7 +347,7 @@ function App() {
     } else if (page === 'revision-sheet') {
       setRoute({ type: 'study-tool', tool: 'revision-sheet', backTo: 'study-tools' });
     }
-  }, []);
+  }, [setRoute]);
 
   const openSubject = useCallback((subjectId: string) => {
     setRoute({ type: 'subject', subjectId });

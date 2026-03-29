@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus, MessageSquarePlus, PanelLeft, Trash2 } from 'lucide-react';
+import { SendHorizontal, Mic, Image as ImageIcon, Calculator, ChevronUp, X, Plus, MessageSquarePlus, PanelLeft } from 'lucide-react';
 import { TutorContextState } from '../components/ContextBar';
 import { SocraticChat } from '../components/SocraticChat';
 import { registerGlobalAudioStopHandler, setGlobalAudioSourceActive } from '../services/audioControl';
@@ -600,7 +600,12 @@ export function SocraticTutorPage({
             role: msg.role === 'assistant' ? 'assistant' : 'user',
             text: msg.role === 'assistant' ? formatAssistantReply(msg.text) : String(msg.text || ''),
             time: formatChatTime(msg.createdAt),
-            tutorId: msg.role === 'assistant' ? tutorId : undefined,
+            tutorId:
+              msg.role === 'assistant'
+                ? msg.tutorId === 'vaani' || msg.tutorId === 'saarthi'
+                  ? msg.tutorId
+                  : tutorId
+                : undefined,
           }))
           : [];
         setMessages(loaded.length > 0 ? loaded : [createInitialAssistantMessage(tutorId, appLanguageCode)]);
@@ -944,20 +949,6 @@ export function SocraticTutorPage({
         {
           id: `assistant-${Date.now() + 1}`,
           role: 'assistant',
-          text:
-            appLanguageCode === 'hi'
-              ? 'कुछ गड़बड़ हो गई। मैं इसे फिर से सोचता हूँ।'
-              : appLanguageCode === 'te'
-                ? 'ఏదో తప్పు జరిగింది. నేను దీనిని మళ్లీ ఆలోచిస్తాను.'
-                : appLanguageCode === 'ta'
-                  ? 'ஏதோ தவறு ஏற்பட்டது. இதை நான் மீண்டும் யோசிக்கிறேன்.'
-                  : appLanguageCode === 'es'
-                    ? 'Algo salió mal. Déjame pensarlo de nuevo.'
-                    : appLanguageCode === 'fr'
-                      ? 'Quelque chose s’est mal passé. Laisse-moi y réfléchir à nouveau.'
-                      : appLanguageCode === 'de'
-                        ? 'Etwas ist schiefgelaufen. Lass mich noch einmal darüber nachdenken.'
-                        : 'Oops, something went wrong. Let me think about that again.',
           text: fallbackText,
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
@@ -1009,6 +1000,15 @@ export function SocraticTutorPage({
       // Keep UI unchanged when delete fails.
     }
   }, [activeThreadId, appLanguageCode, selectedTutorId, threads]);
+
+  const confirmAndDeleteThread = useCallback((threadId: string) => {
+    const threadTitle = threads.find((item) => item.id === threadId)?.title || uiCopy.deleteChatFallback;
+    if (typeof window !== 'undefined') {
+      const shouldDelete = window.confirm(`${uiCopy.deleteChat}: ${threadTitle}?`);
+      if (!shouldDelete) return;
+    }
+    void handleDeleteThread(threadId);
+  }, [handleDeleteThread, threads, uiCopy.deleteChat, uiCopy.deleteChatFallback]);
 
   const stopRecording = useCallback(() => {
     setIsRecording(false);
@@ -1136,15 +1136,10 @@ export function SocraticTutorPage({
                 setSelectedTutorId(tutor.id);
                 if (activeThreadId) {
                   updateThreadTutor(activeThreadId, tutor.id);
-                  setMessages((current) =>
-                        current.map((message) =>
-                          message.role === 'assistant' ? { ...message, tutorId: tutor.id } : message,
-                        ),
-                      );
-                    } else {
-                      setMessages([createInitialAssistantMessage(tutor.id, appLanguageCode)]);
-                    }
-                  }}
+                } else {
+                  setMessages([createInitialAssistantMessage(tutor.id, appLanguageCode)]);
+                }
+              }}
                 >
                   <span className={`socratic-tutor-avatar socratic-tutor-avatar-${tutor.id}`} aria-hidden="true">
                     {tutor.avatar}
@@ -1214,10 +1209,28 @@ export function SocraticTutorPage({
                   title={uiCopy.deleteChat}
                   onClick={(event) => {
                     event.stopPropagation();
-                    void handleDeleteThread(thread.id);
+                    confirmAndDeleteThread(thread.id);
                   }}
                 >
-                  <Trash2 size={14} />
+                 <svg
+                    className="socratic-history-delete-icon"
+                    viewBox="0 0 24 24"
+                    width="15"
+                    height="15"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <path d="M3 6h18" />
+                    <path d="M8 6V4h8v2" />
+                    <path d="M6 6l1 14h10l1-14" />
+                    <path d="M10 10v7" />
+                    <path d="M14 10v7" />
+                  </svg>
                 </button>
               </div>
             ))}

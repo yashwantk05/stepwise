@@ -61,7 +61,7 @@ export function NotebookItem({
           </span>
           <span className="notebook-icon">📘</span>
           <span className="notebook-copy">
-            <strong>{notebook.name}</strong>
+            <strong data-no-translate="true">{notebook.name}</strong>
             <span>Created: {formatDate(notebook.createdAt)}</span>
           </span>
         </button>

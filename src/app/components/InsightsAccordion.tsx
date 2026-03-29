@@ -28,7 +28,7 @@ export function InsightsAccordion({ notebooks }: InsightsAccordionProps) {
           <summary>
             <span className="learning-summary-copy">
               <BookMarked size={16} />
-              {notebook.notebook}
+              <span data-no-translate="true">{notebook.notebook}</span>
             </span>
             <ChevronDown size={18} />
           </summary>

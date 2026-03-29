@@ -6,6 +6,7 @@ import { WeakTopicCard } from '../components/WeakTopicCard';
 import {
   getAssignmentProblemProgress,
   getErrorSummary,
+  getNotebookQuizSessions,
   getProblemErrors,
   listAssignments,
   listSubjects,
@@ -43,6 +44,13 @@ interface ProblemErrorItemRecord {
 
 interface ProblemErrorAttemptRecord {
   mistakes?: ProblemErrorItemRecord[];
+}
+
+interface NotebookQuizSessionRecord {
+  subjectId: string;
+  totalQuestions?: number;
+  correctCount?: number;
+  mistakeCount?: number;
 }
 
 interface WeakTopic {
@@ -143,6 +151,18 @@ export function WeakAreasPage() {
 
     try {
       const subjects = (await listSubjects()) as SubjectRecord[];
+      const quizSessions = (await getNotebookQuizSessions()) as NotebookQuizSessionRecord[];
+      const quizSessionsBySubject = quizSessions.reduce<Record<string, NotebookQuizSessionRecord[]>>(
+        (accumulator, session) => {
+          const subjectId = normalizeLabel(session.subjectId);
+          if (!subjectId) return accumulator;
+          if (!accumulator[subjectId]) accumulator[subjectId] = [];
+          accumulator[subjectId].push(session);
+          return accumulator;
+        },
+        {},
+      );
+
       const assignmentLists = await Promise.all(
         subjects.map(async (subject) => ({
           subject,
@@ -154,6 +174,19 @@ export function WeakAreasPage() {
         assignmentLists.map(async ({ subject, assignments }) => {
           let totalQuestions = 0;
           let totalMistakes = 0;
+
+          const subjectQuizSessions = quizSessionsBySubject[subject.id] || [];
+          subjectQuizSessions.forEach((session) => {
+            const sessionQuestions = Math.max(0, Number(session.totalQuestions || 0));
+            const explicitMistakes = Number(session.mistakeCount);
+            const derivedMistakes = sessionQuestions - Math.max(0, Number(session.correctCount || 0));
+            const sessionMistakes = Number.isFinite(explicitMistakes)
+              ? Math.max(0, explicitMistakes)
+              : Math.max(0, derivedMistakes);
+
+            totalQuestions += sessionQuestions;
+            totalMistakes += sessionMistakes;
+          });
 
           const topicCounts = new Map<string, number>();
           const errorTypeCounts = new Map<string, number>();
@@ -303,7 +336,7 @@ export function WeakAreasPage() {
       setInsightGroups(notebooks);
       setStatus(
         notebooksWithSignal > 0
-          ? `Built from ${notebooksWithSignal} notebooks using stored problem progress and error analysis.`
+          ? `Built from ${notebooksWithSignal} notebooks using problem progress, quiz sessions, and error analysis.`
           : 'No error-analysis data yet. Solve whiteboard problems to build your improvement zones.',
       );
     } catch {

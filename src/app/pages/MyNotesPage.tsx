@@ -530,7 +530,7 @@ export function MyNotesPage({ onOpenTool }: { onOpenTool: (tool: StudyToolType, 
               disabled={loading || subjects.length === 0}
             >
               {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
+                <option key={subject.id} value={subject.id} data-no-translate="true">
                   {subject.name}
                 </option>
               ))}

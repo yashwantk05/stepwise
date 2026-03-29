@@ -726,7 +726,7 @@ export function StudyToolPage({ tool, initialSubjectId, onBack }: StudyToolPageP
               onChange={(e) => setSelectedSubjectId(e.target.value)}
             >
               {subjects.map((subject) => (
-                <option key={subject.id} value={subject.id}>
+                <option key={subject.id} value={subject.id} data-no-translate="true">
                   {subject.name}
                 </option>
               ))}

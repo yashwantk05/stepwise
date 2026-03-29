@@ -11,7 +11,7 @@ export function WeakTopicCard({ topic, notebook, mistakes }: WeakTopicCardProps)
     <article className="weak-topic-card">
       <div className="weak-topic-copy">
         <h3>{topic}</h3>
-        <span className="weak-topic-tag">{notebook}</span>
+        <span className="weak-topic-tag" data-no-translate="true">{notebook}</span>
       </div>
       <div className="weak-topic-metric">
         <strong>{mistakes}</strong>

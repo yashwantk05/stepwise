@@ -601,10 +601,10 @@ export function AssignmentDetailPage({ subjectId, assignmentId, onBack, onOpenPr
           <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M15 10H5M5 10l4 4M5 10l4-4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          Back to {subject.name}
+          Back to <span data-no-translate="true">{subject.name}</span>
         </button>
-        <h1>📝 {assignment.title}</h1>
-        <p>{subject.name} • {normalizeProblemCount(assignment.problemCount)} problems</p>
+        <h1>📝 <span data-no-translate="true">{assignment.title}</span></h1>
+        <p><span data-no-translate="true">{subject.name}</span> • {normalizeProblemCount(assignment.problemCount)} problems</p>
       </div>
 
       <div className="form-section mb-3">

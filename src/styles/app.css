@@ -2034,6 +2034,10 @@ textarea {
   display: none !important;
 }
 
+.canvas-area.style-panel-hidden .excalidraw .sidebar {
+  display: none !important;
+}
+
 .canvas-area > .excalidraw {
   position: relative;
   width: 100%;
@@ -4105,6 +4109,9 @@ textarea {
   flex-direction: column;
   height: 100%; /* fills app-main, no scroll */
   overflow: hidden;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
 }
 
 .socratic-page-shell {
@@ -4322,10 +4329,13 @@ textarea {
 .socratic-body {
   flex: 1;
   overflow: hidden;
+  overflow-x: hidden;
   display: flex;
   justify-content: stretch;
   gap: 0;
   position: relative;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
 }
 
 .socratic-history-rail {
@@ -4383,6 +4393,8 @@ textarea {
 
 .socratic-history-list {
   min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -4394,7 +4406,8 @@ textarea {
   border: 1px solid transparent;
   background: transparent;
   border-radius: 12px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   color: var(--ink);
@@ -4414,6 +4427,7 @@ textarea {
 .socratic-history-item-main {
   flex: 1;
   min-width: 0;
+  width: 100%;
   border: none;
   background: transparent;
   text-align: left;
@@ -4423,9 +4437,17 @@ textarea {
   gap: 4px;
   color: inherit;
   cursor: pointer;
+  align-items: flex-start;
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
 .socratic-history-item strong {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  text-align: left;
   font-size: calc(13px * var(--app-text-zoom));
   font-weight: 600;
   color: var(--ink);
@@ -4441,12 +4463,27 @@ textarea {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--muted);
+  color: #64748b;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
+  position: relative;
+  z-index: 2;
+}
+
+.socratic-history-delete-icon {
+  width: 15px;
+  height: 15px;
+  min-width: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  display: block;
 }
 
 .socratic-history-delete-btn:hover {
@@ -4456,6 +4493,9 @@ textarea {
 }
 
 .socratic-history-item span {
+  display: block;
+  width: 100%;
+  text-align: left;
   font-size: calc(12px * var(--app-text-zoom));
   color: var(--muted);
   white-space: nowrap;
@@ -4472,8 +4512,11 @@ textarea {
 
 .socratic-chat-scroll {
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 16px 0 8px;
+  overscroll-behavior-x: none;
+  touch-action: pan-y;
 }
 
 .socratic-chat-scroll::-webkit-scrollbar {
@@ -4608,6 +4651,7 @@ textarea {
 .socratic-page-v2 .socratic-chat-shell {
   min-height: 0;
   width: 100%;
+  min-width: 0;
   max-width: 1000px;
   margin: 0 auto;
   padding: 0 18px;
@@ -4618,6 +4662,7 @@ textarea {
   border: none;
   border-radius: 0;
   box-shadow: none;
+  overflow-x: hidden;
 }
 
 .socratic-page-v2 .socratic-bubble {
@@ -6654,4 +6699,3 @@ body.accessibility-reduced-motion *::after {
     min-height: 72px;
   }
 }
-

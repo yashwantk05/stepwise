@@ -45,6 +45,20 @@ const MAX_SELECTION_INSIGHT_ITEMS = 1;
 const SIDEBAR_COLLAPSED_BREAKPOINT = Number.MAX_SAFE_INTEGER;
 const WHITEBOARD_AUTOSAVE_DELAY_MS = 2000;
 
+type WhiteboardExcalidrawApi = {
+  refresh: () => void;
+  updateScene?: (sceneData: {
+    appState?: {
+      openMenu?: "canvas" | "shape" | null;
+      openPopup?: "canvasBackground" | "elementBackground" | "elementStroke" | "fontFamily" | null;
+    };
+  }) => void;
+  getAppState?: () => {
+    openMenu?: "canvas" | "shape" | null;
+    openSidebar?: { name: string } | null;
+  };
+};
+
 const getDefaultScene = () => ({
   elements: [],
   appState: {
@@ -423,12 +437,17 @@ interface ProblemBoardPageProps {
 type PickerSource = "pdf" | "capture";
 
 export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: ProblemBoardPageProps) {
+  const pickerPageStorageKey = useMemo(
+    () => `stepwise_problem_picker_page_v1:${assignmentId}:${problemIndex}`,
+    [assignmentId, problemIndex],
+  );
   const [assignment, setAssignment] = useState<any>(null);
   const [status, setStatus] = useState("Loading whiteboard...");
   const [, setHint] = useState("Start drawing to receive hints.");
   const [initialScene, setInitialScene] = useState(getDefaultScene());
   const latestSceneRef = useRef(getDefaultScene());
-  const excalidrawApiRef = useRef<{ refresh: () => void } | null>(null);
+  const latestSceneSnapshotRef = useRef(JSON.stringify(getDefaultScene()));
+  const excalidrawApiRef = useRef<WhiteboardExcalidrawApi | null>(null);
   const excalidrawRefreshRafRef = useRef<number | null>(null);
   const persistedInsights = useMemo(
     () => parseInsightsForProblem(assignment, problemIndex),
@@ -606,11 +625,9 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     try {
       await saveProblemScene(assignmentId, problemIndex, latestSceneRef.current);
       lastSavedSceneRef.current = serializedScene;
-      setStatus(
-        source === "autosave"
-          ? `Auto-saved at ${new Date().toLocaleTimeString()}.`
-          : `Saved at ${new Date().toLocaleTimeString()}.`,
-      );
+      if (source === "manual") {
+        setStatus(`Saved at ${new Date().toLocaleTimeString()}.`);
+      }
     } finally {
       isAutosavingRef.current = false;
       setIsAutosaving(false);
@@ -717,6 +734,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
         setInitialScene(getDefaultScene());
         setSceneRevision((revision) => revision + 1);
         latestSceneRef.current = getDefaultScene();
+        latestSceneSnapshotRef.current = JSON.stringify(latestSceneRef.current);
         setHint("Start drawing to receive hints.");
         lastSnapshotRef.current = null;
         hintLevelRef.current = 1;
@@ -733,6 +751,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       setInitialScene(scene);
       setSceneRevision((revision) => revision + 1);
       latestSceneRef.current = scene;
+      latestSceneSnapshotRef.current = JSON.stringify(scene);
       lastSavedSceneRef.current = JSON.stringify(scene);
       setHint("Start drawing to receive hints.");
       lastSnapshotRef.current = null;
@@ -837,7 +856,17 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
   );
 
   const handleChange = useCallback((elements: any, appState: any, files: any) => {
-    latestSceneRef.current = getPersistedScene({ elements, appState, files });
+    const isMenuOpen = Boolean(appState?.openMenu);
+    setIsStylePanelOpen((current) => (current === isMenuOpen ? current : isMenuOpen));
+
+    const nextScene = getPersistedScene({ elements, appState, files });
+    const nextSerializedScene = JSON.stringify(nextScene);
+    if (nextSerializedScene === latestSceneSnapshotRef.current) {
+      return;
+    }
+
+    latestSceneRef.current = nextScene;
+    latestSceneSnapshotRef.current = nextSerializedScene;
 
     if (autosaveTimerRef.current) {
       window.clearTimeout(autosaveTimerRef.current);
@@ -861,6 +890,22 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
     }
     excalidrawRefreshRafRef.current = requestAnimationFrame(() => {
       excalidrawApiRef.current?.refresh();
+    });
+  }, []);
+
+  const handleStylePanelToggle = useCallback(() => {
+    setIsStylePanelOpen((current) => {
+      const next = !current;
+      const api = excalidrawApiRef.current;
+      if (api?.updateScene) {
+        api.updateScene({
+          appState: {
+            openMenu: next ? "shape" : null,
+            openPopup: null,
+          },
+        });
+      }
+      return next;
     });
   }, []);
 
@@ -924,8 +969,10 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       pdfDocumentRef.current = pdfDocument;
       setPickerSource("pdf");
       setPdfPageCount(pdfDocument.numPages);
-      setSelectedPage(1);
-      await renderSelectedPage(pdfDocument, 1);
+      const storedPage = Number(localStorage.getItem(pickerPageStorageKey) || 1);
+      const initialPage = clamp(storedPage || 1, 1, pdfDocument.numPages || 1);
+      setSelectedPage(initialPage);
+      await renderSelectedPage(pdfDocument, initialPage);
       return;
     } catch {
       // Fall through to capture mode.
@@ -977,6 +1024,11 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       await renderSelectedPage(pdfDocumentRef.current, nextPage);
     }
   };
+
+  useEffect(() => {
+    if (!isPickerOpen || pickerSource !== "pdf") return;
+    localStorage.setItem(pickerPageStorageKey, String(selectedPage));
+  }, [isPickerOpen, pickerPageStorageKey, pickerSource, selectedPage]);
 
   const handleSaveProblemImage = async () => {
     if (!pageImageUrl || !selectionRect || !cropImageRef.current) {
@@ -1287,7 +1339,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
       <header className="topbar">
         <div>
           <p className="eyebrow">Whiteboard</p>
-          <h1>{assignment.title} - Problem {problemIndex}</h1>
+          <h1><span data-no-translate="true">{assignment.title}</span> - Problem {problemIndex}</h1>
         </div>
         <div className="topbar-actions">
           {!selectionMode && (
@@ -1390,7 +1442,7 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
           <button
             type="button"
             className="style-panel-toggle"
-            onClick={() => setIsStylePanelOpen((current) => !current)}
+            onClick={handleStylePanelToggle}
             aria-expanded={isStylePanelOpen}
           >
             Styles {isStylePanelOpen ? "v" : ">"}
@@ -1400,7 +1452,12 @@ export function ProblemBoardPage({ assignmentId, problemIndex, onBack }: Problem
             initialData={initialScene}
             onChange={handleChange}
             excalidrawAPI={(api) => {
-              excalidrawApiRef.current = { refresh: api.refresh.bind(api) };
+              excalidrawApiRef.current = {
+                refresh: api.refresh.bind(api),
+                updateScene: api.updateScene?.bind(api),
+                getAppState: api.getAppState?.bind(api),
+              };
+              setIsStylePanelOpen(Boolean(api.getAppState?.().openMenu));
             }}
             detectScroll={true}
             UIOptions={{

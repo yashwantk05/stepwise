@@ -168,7 +168,13 @@ export async function getSocraticThreadMessages(threadId: string, limit = 200) {
   }
 
   return payload as {
-    messages: Array<{ id: string; role: "assistant" | "user"; text: string; createdAt: number }>;
+    messages: Array<{
+      id: string;
+      role: "assistant" | "user";
+      text: string;
+      createdAt: number;
+      tutorId?: "vaani" | "saarthi" | null;
+    }>;
   };
 }
 

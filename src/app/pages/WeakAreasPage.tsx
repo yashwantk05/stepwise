@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Lightbulb, TrendingUp } from 'lucide-react';
-import { HeatmapChart, HeatmapDatum } from '../components/HeatmapChart';
+import { Lightbulb, TrendingUp } from 'lucide-react';
 import { InsightsAccordion, NotebookInsightData } from '../components/InsightsAccordion';
 import { WeakTopicCard } from '../components/WeakTopicCard';
 import {
@@ -78,6 +77,74 @@ const formatErrorTypeTitle = (value: string) =>
     .trim()
     .replace(/\b\w/g, (character) => character.toUpperCase()) || 'Concept Review';
 
+const toDisplayLabel = (value: string) =>
+  normalizeLabel(value)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+
+const extractTopicHintsFromText = (value: string) => {
+  const normalized = normalizeLabel(value).toLowerCase();
+  if (!normalized) return [] as string[];
+
+  const hints: string[] = [];
+  const maybeAdd = (label: string, pattern: RegExp) => {
+    if (pattern.test(normalized) && !hints.includes(label)) {
+      hints.push(label);
+    }
+  };
+
+  maybeAdd('Quadratic Equations', /\bquadratic\b/);
+  maybeAdd('Linear Equations', /\blinear\b/);
+  maybeAdd('Polynomials', /\bpolynomial|polynomials\b/);
+  maybeAdd('Factoring', /\bfactor|factoring\b/);
+  maybeAdd('Proofs', /\bproof|prove|proving\b/);
+  maybeAdd('Inequalities', /\binequality|inequalities\b/);
+  maybeAdd('Fractions', /\bfraction|denominator|numerator\b/);
+  maybeAdd('Functions', /\bfunction|domain|range\b/);
+  maybeAdd('Trigonometry', /\btrig|trigonometry|sin|cos|tan\b/);
+  maybeAdd('Geometry', /\bgeometry|triangle|circle|angle|area|perimeter|volume\b/);
+  maybeAdd('Calculus', /\bderivative|integral|limit|differentiation|integration|calculus\b/);
+  maybeAdd('Probability', /\bprobability|combinatorics|permutation|combination\b/);
+  maybeAdd('Statistics', /\bstatistics|mean|median|mode|variance|distribution\b/);
+
+  return hints;
+};
+
+const summarizeTopLabels = (entries: Array<[string, number]>, limit: number) =>
+  entries
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([label]) => toDisplayLabel(label))
+    .filter(Boolean);
+
+const buildDetailedInsightSummary = (
+  title: string,
+  count: number,
+  uniqueErrors: number,
+  topics: string[],
+  concepts: string[],
+) => {
+  const pluralizedCount = count === 1 ? 'mistake' : 'mistakes';
+  const pluralizedPatterns = uniqueErrors === 1 ? 'pattern' : 'patterns';
+
+  if (count === 0) {
+    return `We have limited signal for ${title} so far. Keep solving to surface clearer patterns.`;
+  }
+
+  const topicText =
+    topics.length > 0
+      ? ` Highest-impact topics: ${topics.slice(0, 3).join(', ')}.`
+      : ' Topic-level signal is still limited; solve 3-5 more similar questions to sharpen diagnosis.';
+  const conceptText =
+    concepts.length > 0
+      ? ` Core concepts involved: ${concepts.slice(0, 3).join(', ')}.`
+      : '';
+
+  return `Observed ${count} ${pluralizedCount} in ${title} across ${uniqueErrors} ${pluralizedPatterns}.${topicText}${conceptText} Compare the mistake patterns below against your recent attempts.`;
+};
+
 const buildFixExplanation = (title: string) => {
   const lowered = title.toLowerCase();
   if (lowered.includes('sign')) {
@@ -95,8 +162,29 @@ const buildFixExplanation = (title: string) => {
   return 'Review this pattern with one solved example, then redo the same type without hints.';
 };
 
-const buildFallbackMistakes = (title: string) => {
-  const lowered = title.toLowerCase();
+const buildTopicAwareFallbackMistakes = (title: string, topic?: string, concepts: string[] = []) => {
+  const lowered = `${title} ${topic || ''} ${concepts.join(' ')}`.toLowerCase();
+  if (lowered.includes('geometry')) {
+    return [
+      'Used the right theorem family, but applied it to a figure that did not satisfy the required condition.',
+      'Skipped writing given constraints before solving, which caused an invalid angle/side relation.',
+      'Stopped after finding an intermediate angle/length without proving the final target statement.',
+    ];
+  }
+  if (lowered.includes('quadratic')) {
+    return [
+      'Started expansion immediately instead of identifying whether factoring or formula was more efficient.',
+      'Lost one root while solving, especially when moving between factor form and standard form.',
+      'Did not verify roots in the original equation, so an invalid/extraneous value remained.',
+    ];
+  }
+  if (lowered.includes('proof')) {
+    return [
+      'Claimed the target result before establishing all required intermediate statements.',
+      'Used a theorem name without showing why its preconditions were satisfied in this problem.',
+      'Mixed algebraic manipulation with logical proof steps, causing the argument chain to break.',
+    ];
+  }
   if (lowered.includes('sign')) {
     return [
       'Dropped a negative sign when distributing across parentheses.',
@@ -139,19 +227,35 @@ const buildFallbackMistakes = (title: string) => {
   ];
 };
 
-const buildInsightSummary = (title: string, count: number, uniqueErrors: number) => {
-  const pluralizedCount = count === 1 ? 'mistake' : 'mistakes';
-  const pluralizedPatterns = uniqueErrors === 1 ? 'pattern' : 'patterns';
-  if (count === 0) {
-    return `We have limited signal for ${title} so far. Keep solving to surface clearer patterns.`;
+const buildTopicAwareFixes = (title: string, topic?: string, concepts: string[] = []) => {
+  const lowered = `${title} ${topic || ''} ${concepts.join(' ')}`.toLowerCase();
+  if (lowered.includes('geometry')) {
+    return [
+      'Begin every solution with a 2-line setup: known facts and the exact theorem you will use.',
+      'For each theorem application, explicitly state why its condition is met in this figure.',
+      'End with a final conclusion line that directly answers what the question asked to prove/find.',
+    ];
   }
-  return `Observed ${count} ${pluralizedCount} in ${title} with ${uniqueErrors} ${pluralizedPatterns}. Use the examples below to compare against your recent attempts.`;
+  if (lowered.includes('quadratic')) {
+    return [
+      'Choose method first (factorization/completing square/quadratic formula) before computing.',
+      'After solving, substitute each root back once to reject extraneous values.',
+      'Track discriminant and sign carefully to avoid dropping valid roots.',
+    ];
+  }
+  if (lowered.includes('proof')) {
+    return [
+      'Write the proof skeleton first: givens -> theorem conditions -> derived statements -> conclusion.',
+      'Attach one justification to every non-trivial step; avoid unstated jumps.',
+      'Practice one proof daily where the final line must reference the exact target statement.',
+    ];
+  }
+  return [buildFixExplanation(title)];
 };
 
 export function WeakAreasPage() {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState('Loading learning diagnostics...');
-  const [heatmapData, setHeatmapData] = useState<HeatmapDatum[]>([]);
   const [weakTopics, setWeakTopics] = useState<WeakTopic[]>([]);
   const [insightGroups, setInsightGroups] = useState<NotebookInsightData[]>([]);
 
@@ -207,6 +311,7 @@ export function WeakAreasPage() {
               errors: Set<string>;
               fixes: Set<string>;
               topicMentions: Map<string, number>;
+              conceptMentions: Map<string, number>;
             }
           >();
 
@@ -246,6 +351,7 @@ export function WeakAreasPage() {
                   errors: new Set<string>(),
                   fixes: new Set<string>(),
                   topicMentions: new Map<string, number>(),
+                  conceptMentions: new Map<string, number>(),
                 });
               }
             });
@@ -278,6 +384,7 @@ export function WeakAreasPage() {
                     errors: new Set<string>(),
                     fixes: new Set<string>(),
                     topicMentions: new Map<string, number>(),
+                    conceptMentions: new Map<string, number>(),
                   });
                 }
 
@@ -300,9 +407,32 @@ export function WeakAreasPage() {
                 contextTopics.forEach((topic) => {
                   bucket.topicMentions.set(topic, (bucket.topicMentions.get(topic) || 0) + 1);
                 });
+                (item.concepts || [])
+                  .map((concept) => normalizeLabel(concept))
+                  .filter(Boolean)
+                  .forEach((concept) => {
+                    bucket.conceptMentions.set(
+                      concept,
+                      (bucket.conceptMentions.get(concept) || 0) + 1,
+                    );
+                  });
+
+                [summary, whyWrong, rawType]
+                  .filter(Boolean)
+                  .flatMap((value) => extractTopicHintsFromText(value))
+                  .forEach((topicHint) => {
+                    bucket.topicMentions.set(
+                      topicHint,
+                      (bucket.topicMentions.get(topicHint) || 0) + 1,
+                    );
+                  });
               });
             });
           }
+
+          const fallbackTopicCandidates = Array.from(topicCounts.entries())
+            .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+            .slice(0, 3);
 
           const groups = Array.from(groupedInsights.entries())
             .sort(
@@ -311,42 +441,56 @@ export function WeakAreasPage() {
             )
             .map(([key, value]) => {
               const resolvedCount = Math.max(errorTypeCounts.get(key) || 0, value.errors.size);
-              const topTopic = Array.from(value.topicMentions.entries())
-                .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
+              const seededTopicMentions =
+                value.topicMentions.size > 0
+                  ? value.topicMentions
+                  : new Map<string, number>(fallbackTopicCandidates);
+              const topTopics = summarizeTopLabels(Array.from(seededTopicMentions.entries()), 3);
+              const topConcepts = summarizeTopLabels(Array.from(value.conceptMentions.entries()), 3);
+              const topTopic = topTopics[0];
+              const title = topTopic ? `${topTopic} - ${value.title}` : value.title;
+              const resolvedErrors =
+                value.errors.size > 0
+                  ? Array.from(value.errors).slice(0, 6)
+                  : buildTopicAwareFallbackMistakes(value.title, topTopic, topConcepts);
+              const resolvedFixes =
+                value.fixes.size > 0
+                  ? Array.from(value.fixes).slice(0, 3)
+                  : buildTopicAwareFixes(value.title, topTopic, topConcepts);
+              const resolvedUniqueErrors =
+                value.errors.size > 0 ? value.errors.size : resolvedErrors.length;
+              const resolvedUniqueFixes =
+                value.fixes.size > 0 ? value.fixes.size : resolvedFixes.length;
               return {
                 id: `${subject.id}-${key}`,
-                title: value.title,
+                title,
                 topic: topTopic,
-                summary: buildInsightSummary(value.title, resolvedCount, value.errors.size),
+                topics: topTopics,
+                concepts: topConcepts,
+                summary: buildDetailedInsightSummary(
+                  value.title,
+                  resolvedCount,
+                  Math.max(1, resolvedUniqueErrors),
+                  topTopics,
+                  topConcepts,
+                ),
                 count: resolvedCount,
-                uniqueErrors: value.errors.size,
-                uniqueFixes: value.fixes.size,
-                errors:
-                  value.errors.size > 0
-                    ? Array.from(value.errors).slice(0, 6)
-                    : buildFallbackMistakes(value.title),
-                fixes:
-                  value.fixes.size > 0
-                    ? Array.from(value.fixes).slice(0, 3)
-                    : [buildFixExplanation(value.title)],
+                uniqueErrors: resolvedUniqueErrors,
+                uniqueFixes: resolvedUniqueFixes,
+                errors: resolvedErrors,
+                fixes: resolvedFixes,
               };
             })
             .filter((group) => group.errors.length > 0);
 
           return {
             notebook: subject.name,
-            score: totalQuestions > 0 ? Math.min(1, totalMistakes / totalQuestions) : 0,
             totalMistakes,
             topicCounts,
             groups,
           };
         }),
       );
-
-      const heatmap = notebookStats
-        .filter((entry) => entry.totalMistakes > 0)
-        .map((entry) => ({ notebook: entry.notebook, score: entry.score }))
-        .sort((left, right) => right.score - left.score);
 
       const topTopics = notebookStats
         .flatMap((entry) =>
@@ -367,7 +511,6 @@ export function WeakAreasPage() {
         (entry) => entry.totalMistakes > 0 || entry.groups.length > 0,
       ).length;
 
-      setHeatmapData(heatmap);
       setWeakTopics(topTopics);
       setInsightGroups(notebooks);
       setStatus(
@@ -376,7 +519,6 @@ export function WeakAreasPage() {
           : 'No error-analysis data yet. Solve whiteboard problems to build your improvement zones.',
       );
     } catch {
-      setHeatmapData([]);
       setWeakTopics([]);
       setInsightGroups([]);
       setStatus('Unable to load weak-area diagnostics right now.');
@@ -389,7 +531,7 @@ export function WeakAreasPage() {
     void loadWeakAreas();
   }, [loadWeakAreas]);
 
-  const notebookCount = useMemo(() => heatmapData.length, [heatmapData]);
+  const notebookCount = useMemo(() => insightGroups.length, [insightGroups]);
 
   return (
     <div className="app-content">
@@ -409,34 +551,22 @@ export function WeakAreasPage() {
           </div>
         </header>
 
-        <section className="weak-panel">
-          <div className="weak-panel-heading">
-            <div>
-              <h2>
-                <AlertTriangle size={18} />
-                Mistake Heatmap
-              </h2>
-              <p>Topics where you make the most mistakes</p>
-            </div>
-          </div>
+        {loading ? <div className="weak-loading">Analyzing your notebook history...</div> : null}
 
-          {loading ? <div className="weak-loading">Analyzing your notebook history...</div> : <HeatmapChart data={heatmapData} />}
-
-          <div className="weak-topic-grid">
-            {weakTopics.length > 0 ? (
-              weakTopics.map((topic) => (
-                <WeakTopicCard
-                  key={`${topic.notebook}-${topic.topic}`}
-                  topic={topic.topic}
-                  notebook={topic.notebook}
-                  mistakes={topic.mistakes}
-                />
-              ))
-            ) : (
-              <div className="weak-empty-cards">Top weak topics will appear here once mistake data is available.</div>
-            )}
-          </div>
-        </section>
+        <div className="weak-topic-grid">
+          {weakTopics.length > 0 ? (
+            weakTopics.map((topic) => (
+              <WeakTopicCard
+                key={`${topic.notebook}-${topic.topic}`}
+                topic={topic.topic}
+                notebook={topic.notebook}
+                mistakes={topic.mistakes}
+              />
+            ))
+          ) : (
+            <div className="weak-empty-cards">Top weak topics will appear here once mistake data is available.</div>
+          )}
+        </div>
 
         <section className="weak-panel learning-panel">
           <div className="weak-panel-heading">

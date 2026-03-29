@@ -5,6 +5,8 @@ export interface InsightGroupData {
   id: string;
   title: string;
   topic?: string;
+  topics?: string[];
+  concepts?: string[];
   summary: string;
   count: number;
   uniqueErrors: number;
@@ -28,6 +30,16 @@ export function InsightGroup({ group }: InsightGroupProps) {
         {group.topic ? (
           <p className="learning-insight-topic">
             <strong>Topic:</strong> {group.topic}
+          </p>
+        ) : null}
+        {Array.isArray(group.topics) && group.topics.length > 0 ? (
+          <p className="learning-insight-topic">
+            <strong>Focus topics:</strong> {group.topics.join(', ')}
+          </p>
+        ) : null}
+        {Array.isArray(group.concepts) && group.concepts.length > 0 ? (
+          <p className="learning-insight-topic">
+            <strong>Concepts:</strong> {group.concepts.join(', ')}
           </p>
         ) : null}
         <p className="learning-insight-summary">{group.summary}</p>

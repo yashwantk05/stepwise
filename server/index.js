@@ -2276,6 +2276,9 @@ const normalizeErrorPayload = (body) => {
 const inferErrorTypeFromText = (value = "") => {
   const text = String(value || "").toLowerCase();
   if (!text) return "concept review";
+  if (/(proof|prove|theorem|justif)/.test(text)) {
+    return "proof reasoning";
+  }
   if (/(arithmetic|calculate|calculation|compute|addition|subtraction|multiply|division)/.test(text)) {
     return "arithmetic";
   }
@@ -2303,12 +2306,27 @@ const inferTopicsFromContext = (problemContext = "", stage = "", errorText = "")
     }
   };
 
-  maybeAdd("algebra", /\b(algebra|equation|expression|factor|simplif|solve|linear|quadratic)\b/);
+  // Try specific topics first so weak-area insights can name precise skills.
+  maybeAdd("quadratic equations", /\bquadratic|x\^2|discriminant|quadratic formula|roots\b/);
+  maybeAdd("linear equations", /\blinear\b/);
+  maybeAdd("proofs", /\bproof|prove|proving\b/);
+  maybeAdd("factoring", /\bfactor|factoring\b/);
+  maybeAdd("polynomials", /\bpolynomial|polynomials\b/);
+  maybeAdd("systems of equations", /\bsystem of equations|simultaneous equations\b/);
+  maybeAdd("inequalities", /\binequalit(y|ies)\b/);
+  maybeAdd("functions", /\bfunction|domain|range\b/);
+  maybeAdd("trigonometric identities", /\bidentity|identities\b.*\b(sin|cos|tan)|\b(sin|cos|tan).*\bidentity\b/);
+  maybeAdd("derivatives", /\bderivative|differentiat(ion|e)\b/);
+  maybeAdd("integrals", /\bintegral|integrat(ion|e)\b/);
+  maybeAdd("limits", /\blimit\b/);
+  maybeAdd("probability", /\bprobability|permutation|combination|combinatorics\b/);
+  maybeAdd("statistics", /\bstatistics|mean|median|variance|distribution\b/);
+  maybeAdd("fractions", /\bfraction|denominator|numerator\b/);
+
+  maybeAdd("algebra", /\b(algebra|equation|expression|solve|simplif)\b/);
   maybeAdd("geometry", /\b(geometry|angle|triangle|circle|area|perimeter|volume)\b/);
   maybeAdd("calculus", /\b(calculus|derivative|integral|limit|differentiat|integrat)\b/);
   maybeAdd("trigonometry", /\b(trigonometry|trig|sin|cos|tan|sec|csc|cot)\b/);
-  maybeAdd("statistics", /\b(statistics|probability|mean|median|variance|distribution)\b/);
-  maybeAdd("fractions", /\b(fraction|denominator|numerator)\b/);
 
   return topics.slice(0, MAX_TOPICS_PER_MISTAKE);
 };

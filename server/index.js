@@ -626,15 +626,25 @@ const getAzureRequestIdFromHeaders = (headers) =>
   headers?.get("x-ms-request-id") ||
   "";
 
-const getContentSafetyConfig = () => ({
-  endpoint: trimTrailingSlash(readEnv("CONTENT_SAFETY_SERVICE_URL")),
-  failOpen: !["false", "0", "no"].includes(readEnv("CONTENT_SAFETY_FAIL_OPEN").toLowerCase()),
-});
-
 const parsePositiveInt = (value, fallback) => {
   const parsed = Number.parseInt(String(value || "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
+
+const clampSafetySeverity = (value, fallback) => {
+  const parsed = Number.parseInt(String(value || "").trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(6, parsed));
+};
+
+const getContentSafetyConfig = () => ({
+  endpoint: trimTrailingSlash(readEnv("AZURE_CONTENT_SAFETY_ENDPOINT")),
+  apiKey: readEnv("AZURE_CONTENT_SAFETY_KEY"),
+  apiVersion: readEnv("AZURE_CONTENT_SAFETY_API_VERSION") || "2024-09-01",
+  blockSeverity: clampSafetySeverity(readEnv("AZURE_CONTENT_SAFETY_BLOCK_SEVERITY"), 4),
+  reviewSeverity: clampSafetySeverity(readEnv("AZURE_CONTENT_SAFETY_REVIEW_SEVERITY"), 2),
+  failOpen: !["false", "0", "no"].includes(readEnv("CONTENT_SAFETY_FAIL_OPEN").toLowerCase()),
+});
 
 const CONTENT_SAFETY_REQUEST_TIMEOUT_MS = parsePositiveInt(
   readEnv("CONTENT_SAFETY_REQUEST_TIMEOUT_MS"),
@@ -646,23 +656,57 @@ const CONTENT_SAFETY_FAILURE_COOLDOWN_MS = parsePositiveInt(
 );
 let contentSafetyFailOpenUntil = 0;
 
-const moderateViaPythonService = async ({ path, payload, context, failOpenMessage }) => {
-  const { endpoint, failOpen } = getContentSafetyConfig();
-  if (!endpoint) {
+const normalizeContentSafetyCategories = (rawCategories) => {
+  if (!Array.isArray(rawCategories)) return [];
+  return rawCategories
+    .map((item) => ({
+      category: String(item?.category || "").trim(),
+      severity: Number.parseInt(String(item?.severity || "0"), 10) || 0,
+    }))
+    .filter((item) => item.category);
+};
+
+const decideContentSafetyAction = ({ categories, blockSeverity, reviewSeverity }) => {
+  const reasonCodes = [];
+  let action = "allow";
+  for (const item of categories) {
+    if (item.severity >= blockSeverity) {
+      action = "block";
+      reasonCodes.push(`${item.category}:${item.severity}`);
+      continue;
+    }
+    if (action !== "block" && item.severity >= reviewSeverity) {
+      action = "review";
+      reasonCodes.push(`${item.category}:${item.severity}`);
+    }
+  }
+  return { action, reasonCodes };
+};
+
+const moderateViaAzureContentSafety = async ({ kind, payload, context, failOpenMessage }) => {
+  const { endpoint, apiKey, apiVersion, blockSeverity, reviewSeverity, failOpen } = getContentSafetyConfig();
+  if (!endpoint || !apiKey) {
     return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
   }
   if (failOpen && Date.now() < contentSafetyFailOpenUntil) {
     return { enforced: false, skipped: true, action: "allow", categories: [], reasonCodes: [] };
   }
 
+  const path =
+    kind === "image"
+      ? `/contentsafety/image:analyze?api-version=${encodeURIComponent(apiVersion)}`
+      : `/contentsafety/text:analyze?api-version=${encodeURIComponent(apiVersion)}`;
+  const requestUrl = `${endpoint}${path}`;
+
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONTENT_SAFETY_REQUEST_TIMEOUT_MS);
     let moderationResponse;
     try {
-      moderationResponse = await fetch(`${endpoint}${path}`, {
+      moderationResponse = await fetch(requestUrl, {
         method: "POST",
         headers: {
+          "Ocp-Apim-Subscription-Key": apiKey,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
@@ -677,13 +721,19 @@ const moderateViaPythonService = async ({ path, payload, context, failOpenMessag
       throw new Error(`Moderation service failed (${moderationResponse.status}). ${detail}`.trim());
     }
 
-    const result = await moderationResponse.json();
+    const result = await moderationResponse.json().catch(() => ({}));
+    const categories = normalizeContentSafetyCategories(result?.categoriesAnalysis);
+    const decision = decideContentSafetyAction({
+      categories,
+      blockSeverity,
+      reviewSeverity,
+    });
     return {
       enforced: true,
       skipped: false,
-      action: String(result?.action || "allow").trim().toLowerCase(),
-      categories: Array.isArray(result?.categories) ? result.categories : [],
-      reasonCodes: Array.isArray(result?.reasonCodes) ? result.reasonCodes : [],
+      action: decision.action,
+      categories,
+      reasonCodes: decision.reasonCodes,
     };
   } catch (error) {
     const message =
@@ -695,7 +745,7 @@ const moderateViaPythonService = async ({ path, payload, context, failOpenMessag
     }
     console.error(failOpenMessage || "Content Safety request failed:", {
       context,
-      endpoint: `${endpoint}${path}`,
+      endpoint: requestUrl,
       message,
       failOpen,
       retryAfterMs: failOpen ? CONTENT_SAFETY_FAILURE_COOLDOWN_MS : 0,
@@ -708,25 +758,24 @@ const moderateViaPythonService = async ({ path, payload, context, failOpenMessag
 };
 
 const moderateTextInput = async (text, context) =>
-  moderateViaPythonService({
-    path: "/moderate/text",
+  moderateViaAzureContentSafety({
+    kind: "text",
     context,
     failOpenMessage: "Text moderation request failed",
     payload: {
       text: String(text || ""),
-      context,
     },
   });
 
 const moderateImageInput = async (buffer, mimeType, context) =>
-  moderateViaPythonService({
-    path: "/moderate/image",
+  moderateViaAzureContentSafety({
+    kind: "image",
     context,
     failOpenMessage: "Image moderation request failed",
     payload: {
-      imageBase64: Buffer.from(buffer).toString("base64"),
-      mimeType: mimeType || "image/png",
-      context,
+      image: {
+        content: Buffer.from(buffer).toString("base64"),
+      },
     },
   });
 

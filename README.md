@@ -5,7 +5,7 @@ This app has:
 - a Vite React frontend
 - a Node/Express API in `server/index.js`
 - an optional Python FastAPI AI service in `server/server.py` for local experimentation
-- an optional Python FastAPI Content Safety service in `server/content_safety_service.py` for moderation
+- direct Azure AI Content Safety moderation from the Node API
 - Azure Postgres, Azure Blob Storage, Azure OpenAI, and Azure Vision integrations
 
 ## Security
@@ -56,16 +56,6 @@ pip install fastapi uvicorn python-dotenv openai requests python-multipart
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Run the optional Python Content Safety service if you want moderation enforced through Azure AI Content Safety:
-
-```bash
-cd server
-python3 -m venv .venv
-source .venv/bin/activate
-pip install fastapi uvicorn python-dotenv requests
-uvicorn content_safety_service:app --reload --host 0.0.0.0 --port 8001
-```
-
 ## Required Environment Variables
 
 Frontend:
@@ -95,10 +85,9 @@ Backend:
 - `AZURE_OPENAI_FALLBACK_DEPLOYMENTS` (optional comma-separated retry list)
 - `AZURE_VISION_ENDPOINT`
 - `AZURE_VISION_KEY`
-- `CONTENT_SAFETY_SERVICE_URL` (optional; when unset the Node API skips moderation calls)
-- `CONTENT_SAFETY_FAIL_OPEN` (`true` keeps requests flowing if the Python service is down)
-- `AZURE_CONTENT_SAFETY_ENDPOINT` (required by the Python moderation service)
-- `AZURE_CONTENT_SAFETY_KEY` (required by the Python moderation service)
+- `CONTENT_SAFETY_FAIL_OPEN` (`true` keeps requests flowing if Azure Content Safety is temporarily unavailable)
+- `AZURE_CONTENT_SAFETY_ENDPOINT` (required for moderation; e.g. `https://<resource>.cognitiveservices.azure.com/`)
+- `AZURE_CONTENT_SAFETY_KEY` (required for moderation)
 - `AZURE_CONTENT_SAFETY_API_VERSION` (defaults to `2024-09-01`)
 - `AZURE_CONTENT_SAFETY_BLOCK_SEVERITY` (defaults to `4`)
 - `AZURE_CONTENT_SAFETY_REVIEW_SEVERITY` (defaults to `2`)
